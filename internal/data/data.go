@@ -19,15 +19,6 @@ type Process struct {
 	StartTime time.Time
 }
 
-// KernelEvent captures a kernel memory event.
-type KernelEvent struct {
-	Event          string
-	PID            int
-	Timestamp      time.Time
-	VirtualAddress string
-	PFN            string
-}
-
 // VirtualPage tracks virtual address lifecycle.
 type VirtualPage struct {
 	Address   string
@@ -49,7 +40,6 @@ type PFNState struct {
 // ProcessData aggregates all data for a single process.
 type ProcessData struct {
 	Proc    Process
-	Events  []KernelEvent
 	Virtual map[string]*VirtualPage
 	PFNs    map[string]*PFNState
 	Threads []ThreadData
@@ -95,22 +85,8 @@ func BuildDataset(processes []ProcessData) Dataset {
 		ds.Order = append(ds.Order, pid)
 	}
 
-	// Cache process data to avoid repeated map lookups in sort
-	type procSort struct {
-		pid       int
-		startTime time.Time
-	}
-	sortCache := make([]procSort, len(ds.Order))
-	for i, pid := range ds.Order {
-		sortCache[i] = procSort{pid: pid, startTime: ds.Processes[pid].Proc.StartTime}
-	}
-	sort.Slice(ds.Order, func(i, j int) bool {
-		a, b := sortCache[i], sortCache[j]
-		if a.startTime.Equal(b.startTime) {
-			return a.pid < b.pid
-		}
-		return a.startTime.Before(b.startTime)
-	})
+	// Sort processes by start time (then by PID for ties).
+	sortProcessOrder(ds.Order, ds.Processes)
 
 	return ds
 }
@@ -147,88 +123,52 @@ func LoadData(path string) (Dataset, error) {
 		threadMap[rp.PID] = threads
 	}
 
-	// Convert and sort events by timestamp for deterministic lifecycle tracking.
-	events := make([]KernelEvent, 0, len(raw.KernelEvents))
-	for _, re := range raw.KernelEvents {
-		events = append(events, KernelEvent{
-			Event:          re.Event,
-			PID:            re.PID,
-			Timestamp:      parseTime(re.Timestamp),
-			VirtualAddress: re.VirtualAddress,
-			PFN:            re.PFN,
-		})
-	}
-	sort.Slice(events, func(i, j int) bool { return events[i].Timestamp.Before(events[j].Timestamp) })
-
 	ds := Dataset{Processes: make(map[int]*ProcessData)}
 
-	// Ensure all processes are included, even those without events.
+	// Initialize all processes from the input data.
 	for pid, proc := range procMap {
-		if _, exists := ds.Processes[pid]; !exists {
-			ds.Processes[pid] = &ProcessData{
-				Proc:    proc,
-				Virtual: make(map[string]*VirtualPage),
-				PFNs:    make(map[string]*PFNState),
-				Threads: threadMap[pid],
-			}
-			ds.Order = append(ds.Order, pid)
+		ds.Processes[pid] = &ProcessData{
+			Proc:    proc,
+			Virtual: make(map[string]*VirtualPage),
+			PFNs:    make(map[string]*PFNState),
+			Threads: threadMap[pid],
 		}
+		ds.Order = append(ds.Order, pid)
 	}
 
-	for _, ev := range events {
-		pd, exists := ds.Processes[ev.PID]
-		if !exists {
-			continue
-		}
+	// Keep process order stable by start time (then by PID for ties).
+	sortProcessOrder(ds.Order, procMap)
 
-		pd.Events = append(pd.Events, ev)
+	return ds, nil
+}
 
-		// Track virtual address lifecycle.
-		if ev.VirtualAddress != "" {
-			vp, ok := pd.Virtual[ev.VirtualAddress]
-			if !ok {
-				vp = &VirtualPage{Address: ev.VirtualAddress, SeenAt: ev.Timestamp}
-				pd.Virtual[ev.VirtualAddress] = vp
-			}
-			vp.PFN = coalesce(vp.PFN, ev.PFN)
-			vp.LastEvent = ev.Event
-			vp.UpdatedAt = ev.Timestamp
-			vp.Phase = lifecyclePhase(vp.Phase, ev.Event)
-		}
-
-		// Track PFN usage independently.
-		if ev.PFN != "" {
-			pf, ok := pd.PFNs[ev.PFN]
-			if !ok {
-				pf = &PFNState{PFN: ev.PFN, Virtuals: make(map[string]bool)}
-				pd.PFNs[ev.PFN] = pf
-			}
-			if ev.VirtualAddress != "" {
-				pf.Virtuals[ev.VirtualAddress] = true
-			}
-			pf.Phase = lifecyclePhase(pf.Phase, ev.Event)
-			pf.UpdatedAt = ev.Timestamp
-		}
-	}
-
-	// Keep process order stable by start time (cache lookups)
+// sortProcessOrder sorts process IDs by their start time (with PID as tiebreaker).
+// This function accepts either map[int]Process or map[int]*ProcessData as procSource.
+func sortProcessOrder[T Process | *ProcessData](order []int, procSource map[int]T) {
 	type procSort struct {
 		pid       int
 		startTime time.Time
 	}
-	sortCache := make([]procSort, len(ds.Order))
-	for i, pid := range ds.Order {
-		sortCache[i] = procSort{pid: pid, startTime: procMap[pid].StartTime}
+
+	sortCache := make([]procSort, len(order))
+	for i, pid := range order {
+		var startTime time.Time
+		switch ps := any(procSource[pid]).(type) {
+		case Process:
+			startTime = ps.StartTime
+		case *ProcessData:
+			startTime = ps.Proc.StartTime
+		}
+		sortCache[i] = procSort{pid: pid, startTime: startTime}
 	}
-	sort.Slice(ds.Order, func(i, j int) bool {
+
+	sort.Slice(order, func(i, j int) bool {
 		a, b := sortCache[i], sortCache[j]
 		if a.startTime.Equal(b.startTime) {
 			return a.pid < b.pid
 		}
 		return a.startTime.Before(b.startTime)
 	})
-
-	return ds, nil
 }
 
 func parseTime(ts string) time.Time {
@@ -240,36 +180,6 @@ func parseTime(ts string) time.Time {
 		return time.Time{}
 	}
 	return t.UTC()
-}
-
-func coalesce(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func lifecyclePhase(current, event string) string {
-	// Simple mapping of kernel events to lifecycle phases.
-	switch event {
-	case "page_alloc":
-		if current == "" {
-			return "created"
-		}
-		return current
-	case "page_fault_user":
-		return "initialized"
-	case "swap_writepage":
-		return "swapped"
-	case "do_swap_page":
-		return "recovered"
-	case "page_free":
-		return "freed"
-	default:
-		return current
-	}
 }
 
 func convertRanges(rawRanges []rawRange) []AddrRange {
@@ -317,15 +227,6 @@ type rawRange struct {
 	Statuses     map[string][]string `json:"statuses"`
 }
 
-type rawKernelEvent struct {
-	Event          string `json:"event"`
-	PID            int    `json:"pid"`
-	Timestamp      string `json:"timestamp"`
-	VirtualAddress string `json:"virtual_address"`
-	PFN            string `json:"pfn"`
-}
-
 type rawData struct {
-	Processes    []rawProcess     `json:"processes"`
-	KernelEvents []rawKernelEvent `json:"kernel_events"`
+	Processes []rawProcess `json:"processes"`
 }

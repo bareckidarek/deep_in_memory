@@ -309,14 +309,12 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(pd))
 }
 
-func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCount int) string {
+func (m *Model) renderSummary(proc data.Process, _ *data.ProcessData, virtualCount int) string {
 	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
-	return fmt.Sprintf("Process: %s (%d)\nStart (UTC): %s\nEvents: %d\nVirtual pages: %d\nPFNs: %d\nVirtual usage: %s\n",
+	return fmt.Sprintf("Process: %s (%d)\nStart (UTC): %s\nVirtual pages: %d\nVirtual usage: %s\n\nPhysical Memory:\n(coming soon)\n",
 		proc.Name, proc.PID,
 		startUTC,
-		len(pd.Events),
 		virtualCount,
-		len(pd.PFNs),
 		uirender.HumanBytes(int64(virtualCount)*data.PageSizeBytes),
 	)
 }

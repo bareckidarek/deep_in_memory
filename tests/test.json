@@ -319,41 +319,5 @@
         }
       ]
     }
-  ],
-  "kernel_events": [
-    {
-      "event": "page_alloc",
-      "pid": 1234,
-      "timestamp": "2026-01-05T10:00:05Z",
-      "virtual_address": "0x7fff12345000",
-      "pfn": "0x12345"
-    },
-    {
-      "event": "page_free",
-      "pid": 1234,
-      "timestamp": "2026-01-05T10:00:10Z",
-      "virtual_address": "0x7fff12345000",
-      "pfn": "0x12345"
-    },
-    {
-      "event": "page_fault_user",
-      "pid": 5678,
-      "timestamp": "2026-01-05T10:02:30Z",
-      "virtual_address": "0x7fff56789000"
-    },
-    {
-      "event": "swap_writepage",
-      "pid": 5678,
-      "timestamp": "2026-01-05T10:03:00Z",
-      "virtual_address": "0x7fff56789000",
-      "pfn": "0x56789"
-    },
-    {
-      "event": "do_swap_page",
-      "pid": 5678,
-      "timestamp": "2026-01-05T10:04:00Z",
-      "virtual_address": "0x7fff56789000",
-      "pfn": "0x56789"
-    }
   ]
 }

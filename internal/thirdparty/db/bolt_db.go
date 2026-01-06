@@ -3,7 +3,6 @@ package db
 import (
 	"deep_in_memory/internal/data"
 	"fmt"
-	"hash/fnv"
 
 	"github.com/timshannon/bolthold"
 	"go.etcd.io/bbolt"
@@ -26,17 +25,6 @@ func (boltDb *BoltDb[T]) Close() error {
 	return boltDb.store.Close()
 }
 
-func (boltDb *BoltDb[T]) Read(key string) (T, error) {
-	var value T
-	return value, boltDb.store.Bolt().View(func(tx *bbolt.Tx) error {
-		err := boltDb.store.TxGet(tx, key, &value)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
 func (boltDb *BoltDb[T]) Query(query *bolthold.Query) ([]T, error) {
 	var value []T
 	return value, boltDb.store.Bolt().View(func(tx *bbolt.Tx) error {
@@ -52,13 +40,6 @@ func (boltDb *BoltDb[T]) All() ([]T, error) {
 	return boltDb.Query(bolthold.Where("Proc.PID").Ge(0))
 }
 
-func (boltDb *BoltDb[T]) QueryMatchFunc(field string, matchFunc func(*T) (bool, error)) bolthold.Query {
-	return *bolthold.Where(field).MatchFunc(func(ra *bolthold.RecordAccess) (bool, error) {
-		record := ra.Record().(*T)
-		return matchFunc(record)
-	})
-}
-
 func (boltDb *BoltDb[T]) Upsert(key string, value *T) error {
 	return boltDb.store.Bolt().Update(
 		func(tx *bbolt.Tx) error {
@@ -72,10 +53,4 @@ func (boltDb *BoltDb[T]) Delete(key string) error {
 		func(tx *bbolt.Tx) error {
 			return boltDb.store.TxDelete(tx, key, zero)
 		})
-}
-
-func HashId(s string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return h.Sum32()
 }
