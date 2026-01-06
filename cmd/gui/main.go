@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os/signal"
 	"syscall"
@@ -12,6 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"deep_in_memory/internal/data"
+	"deep_in_memory/internal/ebpf/mmap"
+	"deep_in_memory/internal/ebpf/page_fault"
 	"deep_in_memory/internal/ebpf/sched"
 	storedb "deep_in_memory/internal/thirdparty/db"
 )
@@ -26,6 +29,11 @@ func main() {
 	}
 	defer store.Close()
 
+	// Clear database on startup for fresh state
+	if err := clearDatabase(store); err != nil {
+		log.Fatalf("failed to clear database: %v", err)
+	}
+
 	initialProcs, err := store.All()
 	if err != nil {
 		log.Fatalf("failed to read initial data: %v", err)
@@ -34,14 +42,46 @@ func main() {
 	appModel := app.New(store, initial, time.Second)
 	p := tea.NewProgram(appModel, tea.WithAltScreen(), tea.WithMouseAllMotion())
 
-	cleanup, setTargetPID, err := sched.Start(ctx, p.Send)
+	// Start sched collector and get the shared target_pid map
+	schedCleanup, setTargetPID, targetPidMap, err := sched.Start(ctx, p.Send)
 	if err != nil {
-		log.Fatalf("failed to start eBPF collector: %v", err)
+		log.Fatalf("failed to start sched eBPF collector: %v", err)
 	}
+	defer schedCleanup()
+
+	// Start mmap collector with shared target_pid map
+	mmapCleanup, err := mmap.Start(ctx, p.Send, targetPidMap)
+	if err != nil {
+		log.Fatalf("failed to start mmap eBPF collector: %v", err)
+	}
+	defer mmapCleanup()
+
+	// Start page_fault collector with shared target_pid map
+	pageFaultCleanup, err := page_fault.Start(ctx, p.Send, targetPidMap)
+	if err != nil {
+		log.Fatalf("failed to start page_fault eBPF collector: %v", err)
+	}
+	defer pageFaultCleanup()
+
+	// Only sched owns the target_pid map, so we only use its setter
 	appModel.SetTargetPIDSetter(setTargetPID)
-	defer cleanup()
 
 	if err := p.Start(); err != nil {
 		log.Fatalf("tui error: %v", err)
 	}
+}
+
+func clearDatabase(store storedb.Db[data.ProcessData]) error {
+	allProcs, err := store.All()
+	if err != nil {
+		return err
+	}
+	for _, proc := range allProcs {
+		key := fmt.Sprintf("%d", proc.Proc.PID)
+		if err := store.Delete(key); err != nil {
+			// Continue even if delete fails
+			log.Printf("failed to delete process %d: %v", proc.Proc.PID, err)
+		}
+	}
+	return nil
 }

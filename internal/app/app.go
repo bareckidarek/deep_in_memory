@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/timshannon/bolthold"
 
 	"deep_in_memory/internal/data"
 	storedb "deep_in_memory/internal/thirdparty/db"
@@ -50,6 +51,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case uimsg.ProcessExit:
 		_ = m.handleExit(v)
 		return m, nil
+	case uimsg.ProcessMmap:
+		_ = m.handleMmap(v)
+		return m, nil
+	case uimsg.ProcessMunmap:
+		_ = m.handleMunmap(v)
+		return m, nil
+	case uimsg.ProcessPageFault:
+		_ = m.handlePageFault(v)
+		return m, nil
 	case refreshMsg:
 		m.reload()
 		return m, tea.Tick(m.refreshInterval, func(time.Time) tea.Msg { return refreshMsg{} })
@@ -82,6 +92,7 @@ func (m *Model) persistFork(ev uimsg.ProcessFork) error {
 		Proc:    data.Process{PID: ev.ChildPID, Name: ev.Comm, StartTime: ev.Timestamp.UTC()},
 		Virtual: make(map[string]*data.VirtualPage),
 		PFNs:    make(map[string]*data.PFNState),
+		Threads: []data.ThreadData{},
 	}
 	return m.db.Upsert(pid, &record)
 }
@@ -89,4 +100,57 @@ func (m *Model) persistFork(ev uimsg.ProcessFork) error {
 func (m *Model) handleExit(ev uimsg.ProcessExit) error {
 	key := strconv.Itoa(ev.PID)
 	return m.db.Delete(key)
+}
+
+func (m *Model) handleMmap(ev uimsg.ProcessMmap) error {
+	// Retrieve existing record
+	key := strconv.Itoa(ev.PID)
+	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
+	if err != nil || len(records) == 0 {
+		// Process not found, create it
+		record := &data.ProcessData{
+			Proc:    data.Process{PID: ev.PID, Name: ev.Comm, StartTime: ev.Timestamp.UTC()},
+			Virtual: make(map[string]*data.VirtualPage),
+			PFNs:    make(map[string]*data.PFNState),
+			Threads: []data.ThreadData{},
+		}
+		record.AddMmapRange(ev.TID, ev.Addr, ev.Len)
+		return m.db.Upsert(key, record)
+	}
+
+	// Update existing record
+	record := &records[0]
+	record.AddMmapRange(ev.TID, ev.Addr, ev.Len)
+	return m.db.Upsert(key, record)
+}
+
+func (m *Model) handleMunmap(ev uimsg.ProcessMunmap) error {
+	// Retrieve existing record
+	key := strconv.Itoa(ev.PID)
+	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
+	if err != nil || len(records) == 0 {
+		// Process not found, nothing to unmap
+		return nil
+	}
+
+	// Update existing record
+	record := &records[0]
+	record.RemoveMmapRange(ev.TID, ev.Addr, ev.Len)
+	return m.db.Upsert(key, record)
+}
+
+func (m *Model) handlePageFault(ev uimsg.ProcessPageFault) error {
+
+	// Retrieve existing record
+	key := strconv.Itoa(ev.PID)
+	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+
+	// Update existing record
+	record := &records[0]
+	record.AddPageFault(ev.TID, ev.Address)
+
+	return m.db.Upsert(key, record)
 }

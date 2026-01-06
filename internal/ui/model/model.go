@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -30,7 +31,8 @@ const (
 type Model struct {
 	list             list.Model
 	data             data.Dataset
-	selectedPID      int
+	selectedPID      int // Process selected with Enter (shows details)
+	focusedPID       int // Process under cursor (arrow navigation)
 	width            int
 	height           int
 	err              error
@@ -41,27 +43,29 @@ type Model struct {
 
 // New constructs a Model from dataset.
 func New(d data.Dataset) *Model {
-	items := make([]list.Item, 0, len(d.Order))
-	for _, pid := range d.Order {
-		items = append(items, renderListItem(d.Processes[pid].Proc))
-	}
-
-	l := list.New(items, list.NewDefaultDelegate(), defaultListWidth, defaultListHeight)
-	l.Title = "Processes"
-	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(false)
-	l.DisableQuitKeybindings()
-
 	m := &Model{
-		list:             l,
 		data:             d,
-		selectedPID:      0,
+		selectedPID:      0, // No selection until user presses Enter
+		focusedPID:       0,
 		viewportVirtual:  viewport.New(0, 0),
 		viewportPhysical: viewport.New(0, 0),
 	}
 
+	items := make([]list.Item, 0, len(d.Order))
+	for _, pid := range d.Order {
+		items = append(items, renderListItem(d.Processes[pid].Proc, pid))
+	}
+
+	delegate := newProcessDelegate(m)
+	l := list.New(items, delegate, defaultListWidth, defaultListHeight)
+	l.Title = "Processes"
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(false)
+	l.DisableQuitKeybindings()
+	m.list = l
+
 	if len(d.Order) > 0 {
-		m.selectedPID = d.Order[0]
+		m.focusedPID = d.Order[0]
 	}
 
 	return m
@@ -118,7 +122,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.list, cmd = m.list.Update(adj)
 			if sel, ok := m.list.SelectedItem().(listItem); ok {
-				m.applySelection(sel.pid, false)
+				m.focusedPID = sel.pid
 			}
 			return m, cmd
 		}
@@ -126,6 +130,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmdList tea.Cmd
 	m.list, cmdList = m.list.Update(msg)
+
+	// Update focused PID based on cursor position (not selection)
+	if sel, ok := m.list.SelectedItem().(listItem); ok {
+		m.focusedPID = sel.pid
+	}
 
 	return m, cmdList
 }
@@ -135,8 +144,17 @@ func (m *Model) syncLayout() {
 	if m.width == 0 || m.height == 0 {
 		return
 	}
-	if pd, ok := m.currentProcessData(); ok {
-		m.updateViewports(pd)
+	// Only show details if a process is selected (via Enter)
+	if m.selectedPID != 0 {
+		if pd, ok := m.currentProcessData(); ok {
+			m.updateViewports(pd)
+		} else {
+			// Selected process no longer exists, clear selection
+			m.selectedPID = 0
+			m.clearViewports()
+		}
+	} else {
+		m.clearViewports()
 	}
 }
 
@@ -189,13 +207,6 @@ func (m *Model) View() string {
 }
 
 func (m *Model) renderSplitDetails() string {
-	pd, ok := m.currentProcessData()
-	if !ok {
-		return "Select a process to view details"
-	}
-
-	m.updateViewports(pd)
-
 	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(available)
 	virtualBox := box.Height(rowHeight).Render(m.viewportVirtual.View())
@@ -216,22 +227,103 @@ func (i listItem) Title() string       { return i.title }
 func (i listItem) Description() string { return i.description }
 func (i listItem) FilterValue() string { return i.title }
 
-func renderListItem(proc data.Process) listItem {
+func renderListItem(proc data.Process, pid int) listItem {
 	desc := fmt.Sprintf("Start: %s UTC", proc.StartTime.UTC().Format("15:04:05"))
-	return listItem{title: fmt.Sprintf("%s (%d)", proc.Name, proc.PID), description: desc, pid: proc.PID}
+	title := fmt.Sprintf("%s (%d)", proc.Name, proc.PID)
+	return listItem{title: title, description: desc, pid: pid}
+}
+
+// Custom delegate to show selection and focus markers
+type processDelegate struct {
+	list.DefaultDelegate
+	model *Model
+}
+
+func newProcessDelegate(m *Model) *processDelegate {
+	d := list.NewDefaultDelegate()
+	return &processDelegate{
+		DefaultDelegate: d,
+		model:           m,
+	}
+}
+
+func (d *processDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	li, ok := item.(listItem)
+	if !ok {
+		d.DefaultDelegate.Render(w, m, index, item)
+		return
+	}
+
+	isSelected := li.pid == d.model.selectedPID
+	isCursor := index == m.Index()
+
+	marker := "  "
+	titleStyle := lipgloss.NewStyle()
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+
+	if isSelected {
+		marker = "► "                                                       // Selected with Enter
+		titleStyle = titleStyle.Foreground(lipgloss.Color("10")).Bold(true) // Green + bold
+	}
+
+	if isCursor {
+		if !isSelected {
+			marker = "• "                                            // Just cursor focus
+			titleStyle = titleStyle.Foreground(lipgloss.Color("12")) // Blue
+		}
+		titleStyle = titleStyle.Background(lipgloss.Color("236")) // Dark background
+		descStyle = descStyle.Background(lipgloss.Color("236"))
+	}
+
+	title := titleStyle.Render(marker + li.Title())
+	desc := descStyle.Render("  " + li.Description())
+
+	fmt.Fprintf(w, "%s\n%s", title, desc)
 }
 
 func (m *Model) refreshList() {
 	items := make([]list.Item, 0, len(m.data.Order))
 	for _, pid := range m.data.Order {
 		if procData, ok := m.data.Processes[pid]; ok {
-			items = append(items, renderListItem(procData.Proc))
+			items = append(items, renderListItem(procData.Proc, pid))
 		}
 	}
+
+	// Find indices for focused and selected PIDs
+	focusIdx := -1
+	for idx, item := range items {
+		if li, ok := item.(listItem); ok {
+			if li.pid == m.focusedPID {
+				focusIdx = idx
+				break
+			}
+		}
+	}
+
 	m.list.SetItems(items)
-	selectionChanged := m.ensureSelection(items)
-	if selectionChanged {
-		m.syncLayout()
+
+	// Restore cursor to focused PID or default to first
+	if focusIdx >= 0 {
+		m.list.Select(focusIdx)
+	} else if len(items) > 0 {
+		m.list.Select(0)
+		if li, ok := items[0].(listItem); ok {
+			m.focusedPID = li.pid
+		}
+	}
+
+	// Check if selected process still exists, if not clear selection
+	if m.selectedPID != 0 {
+		found := false
+		for _, item := range items {
+			if li, ok := item.(listItem); ok && li.pid == m.selectedPID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.selectedPID = 0 // Clear selection if process disappeared
+		}
 	}
 }
 
@@ -309,6 +401,11 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(pd))
 }
 
+func (m *Model) clearViewports() {
+	m.viewportVirtual.SetContent("No process selected.\nPress Enter on a process to view details.")
+	m.viewportPhysical.SetContent("")
+}
+
 func (m *Model) renderSummary(proc data.Process, _ *data.ProcessData, virtualCount int) string {
 	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
 	return fmt.Sprintf("Process: %s (%d)\nStart (UTC): %s\nVirtual pages: %d\nVirtual usage: %s\n\nPhysical Memory:\n(coming soon)\n",
@@ -325,7 +422,14 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 		"ctrl+c": func() (tea.Model, tea.Cmd) { return m, tea.Quit },
 		"enter": func() (tea.Model, tea.Cmd) {
 			if sel, ok := m.list.SelectedItem().(listItem); ok {
-				m.applySelection(sel.pid, true)
+				// Enter selects the focused process
+				m.selectedPID = sel.pid
+				if m.setTargetPID != nil {
+					if err := m.setTargetPID(sel.pid); err != nil {
+						m.err = err
+					}
+				}
+				m.syncLayout()
 			}
 			return m, nil
 		},

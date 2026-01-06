@@ -67,6 +67,120 @@ type Dataset struct {
 	Order     []int
 }
 
+// AddMmapRange adds a new virtual address range for a thread based on mmap event.
+func (pd *ProcessData) AddMmapRange(tid int, addr, length uint64) {
+	if pd.Threads == nil {
+		pd.Threads = []ThreadData{}
+	}
+
+	// Find or create thread
+	var threadIdx = -1
+	for i, th := range pd.Threads {
+		if th.TID == tid {
+			threadIdx = i
+			break
+		}
+	}
+
+	if threadIdx == -1 {
+		// Create new thread
+		pd.Threads = append(pd.Threads, ThreadData{
+			TID:    tid,
+			Ranges: []AddrRange{},
+		})
+		threadIdx = len(pd.Threads) - 1
+	}
+
+	// Create new range
+	startAddr := addr
+	endAddr := addr + length
+	newRange := AddrRange{
+		Start:    fmt.Sprintf("%x", startAddr),
+		End:      fmt.Sprintf("%x", endAddr),
+		StartVal: startAddr,
+		EndVal:   endAddr,
+		Size:     length,
+		Statuses: make(map[string][]string),
+	}
+
+	pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
+}
+
+// AddPageFault finds the virtual address range containing the faulted address
+// and adds it to Statuses["INIT"] list.
+func (pd *ProcessData) AddPageFault(tid int, faultAddr uint64) {
+	if pd.Threads == nil {
+		return
+	}
+
+	// Find thread
+	var threadIdx = -1
+	for i, th := range pd.Threads {
+		if th.TID == tid {
+			threadIdx = i
+			break
+		}
+	}
+
+	if threadIdx == -1 {
+		// Thread not found
+		return
+	}
+
+	// Find range containing faultAddr
+	for rangeIdx, r := range pd.Threads[threadIdx].Ranges {
+		if faultAddr >= r.StartVal && faultAddr < r.EndVal {
+			// Found the range
+			if pd.Threads[threadIdx].Ranges[rangeIdx].Statuses == nil {
+				pd.Threads[threadIdx].Ranges[rangeIdx].Statuses = make(map[string][]string)
+			}
+
+			addrHex := fmt.Sprintf("%x", faultAddr)
+
+			// Check if already present
+			initList := pd.Threads[threadIdx].Ranges[rangeIdx].Statuses["INIT"]
+			for _, existing := range initList {
+				if existing == addrHex {
+					return // Already tracked
+				}
+			}
+
+			// Add to INIT status
+			pd.Threads[threadIdx].Ranges[rangeIdx].Statuses["INIT"] = append(initList, addrHex)
+			return
+		}
+	}
+}
+
+// RemoveMmapRange removes or marks freed a virtual address range for munmap.
+func (pd *ProcessData) RemoveMmapRange(tid int, addr, length uint64) {
+	if pd.Threads == nil {
+		return
+	}
+
+	endAddr := addr + length
+
+	// Find thread
+	for i, th := range pd.Threads {
+		if th.TID != tid {
+			continue
+		}
+
+		// Find and remove overlapping ranges
+		newRanges := []AddrRange{}
+		for _, r := range th.Ranges {
+			// Check if range overlaps with munmap region
+			if r.StartVal < endAddr && r.EndVal > addr {
+				// This range overlaps, skip it (remove it)
+				continue
+			}
+			newRanges = append(newRanges, r)
+		}
+		pd.Threads[i].Ranges = newRanges
+		break
+	}
+}
+
 // BuildDataset assembles a Dataset from a slice of process records.
 // Processes are ordered by start time, then PID.
 func BuildDataset(processes []ProcessData) Dataset {

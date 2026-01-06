@@ -21,23 +21,24 @@ import (
 // Start attaches sched tracepoints and streams events to the provided send function.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // A setter is returned to update the single-element target PID map from the UI.
-func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) error, error) {
+// The target_pid map is also returned so it can be shared with other eBPF modules.
+func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) error, *ebpf.Map, error) {
 	var objs SchedProgObjects
 	if err := LoadSchedProgObjects(&objs, nil); err != nil {
-		return nil, nil, fmt.Errorf("load BPF objects: %w", err)
+		return nil, nil, nil, fmt.Errorf("load BPF objects: %w", err)
 	}
 
 	forkLink, err := link.Tracepoint("sched", "sched_process_fork", objs.HandleFork, nil)
 	if err != nil {
 		objs.Close()
-		return nil, nil, fmt.Errorf("attach fork: %w", err)
+		return nil, nil, nil, fmt.Errorf("attach fork: %w", err)
 	}
 
 	exitLink, err := link.Tracepoint("sched", "sched_process_exit", objs.HandleExit, nil)
 	if err != nil {
 		forkLink.Close()
 		objs.Close()
-		return nil, nil, fmt.Errorf("attach exit: %w", err)
+		return nil, nil, nil, fmt.Errorf("attach exit: %w", err)
 	}
 
 	reader, err := ringbuf.NewReader(objs.Events)
@@ -45,7 +46,7 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 		exitLink.Close()
 		forkLink.Close()
 		objs.Close()
-		return nil, nil, fmt.Errorf("create ringbuf reader: %w", err)
+		return nil, nil, nil, fmt.Errorf("create ringbuf reader: %w", err)
 	}
 
 	setTargetPID := func(pid int) error {
@@ -98,7 +99,7 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 		return objs.Close()
 	}
 
-	return cleanup, setTargetPID, nil
+	return cleanup, setTargetPID, objs.TargetPid, nil
 }
 
 func cString(b []int8) string {
