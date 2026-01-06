@@ -1,0 +1,24 @@
+#!/usr/bin/env bpftrace
+
+uprobe:/lib/x86_64-linux-gnu/libc.so.6:free
+/ pid == $1 /
+{
+    // używamy uint64 zamiast size_t
+    $ptr = (uint64)arg0;
+
+    if ($ptr == 0) {
+        //exit();
+    }
+
+    // header chunku: ptr - SIZE_SZ (8B)
+    $hdr = *(uint64*)($ptr - 8);
+
+    // maskujemy flagi (PREV_INUSE | IS_MMAPPED | NON_MAIN_ARENA)
+    $size = $hdr & ~0x7;
+
+    if ($size <= 64) {
+        printf("free -> FASTBIN  ptr=%p size=%d\n", $ptr, $size);
+    } else {
+        printf("free -> NORMAL   ptr=%p size=%d\n", $ptr, $size);
+    }
+}

@@ -1,0 +1,41 @@
+#!/usr/bin/env bpftrace
+
+// Monitorowanie wejścia do sys_enter_mmap
+tracepoint:syscalls:sys_enter_mmap
+/ pid == $1 /
+{
+    printf("sys_enter_mmap: PID=%d, Comm=%s, addr=0x%lx, length=%lu, prot=%d, flags=%d, fd=%d, offset=%lu\n",
+           pid, comm, args->addr, args->len, args->prot, args->flags, args->fd, args->off);
+}
+
+// Monitorowanie wyjścia z sys_exit_mmap
+tracepoint:syscalls:sys_exit_mmap
+/ pid == $1 /
+{
+    printf("sys_exit_mmap: PID=%d, Comm=%s, ret=0x%lx\n",
+           pid, comm, args->ret);
+}
+
+// Monitorowanie wejścia do sys_enter_munmap
+tracepoint:syscalls:sys_enter_munmap
+/ pid == $1 /
+{
+    printf("sys_enter_munmap: PID=%d, Comm=%s, addr=0x%lx, length=%lu\n",
+           pid, comm, args->addr, args->len);
+}
+
+// Monitorowanie wyjścia z sys_exit_munmap
+tracepoint:syscalls:sys_exit_munmap
+/ pid == $1 /
+{
+    printf("sys_exit_munmap: PID=%d, Comm=%s, ret=%d\n",
+           pid, comm, args->ret);
+}
+
+kprobe:do_mmap
+/ pid == $1 /
+{
+    printf("do_mmap called: PID=%d, Comm=%s, addr=0x%lx, len=%lu, prot=0x%x, flags=0x%x\n",
+           pid, comm, arg1, arg2, arg3, arg4);
+}
+

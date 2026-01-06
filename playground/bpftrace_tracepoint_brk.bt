@@ -1,0 +1,20 @@
+#!/usr/bin/env bpftrace
+
+tracepoint:syscalls:sys_enter_brk 
+/ pid == $1 /
+{
+    printf("Entering brk: PID=%d, comm=%s, addr=%lx\n", pid, comm, args->brk);
+}
+
+tracepoint:syscalls:sys_exit_brk 
+/ pid == $1 /
+{
+    printf("Exiting brk: PID=%d, comm=%s, result=%lx\n", pid, comm, args->ret);
+}
+
+tracepoint:kmem:kmalloc 
+/ pid == $1 /
+{
+    printf("kmalloc: call_site=0x%lx, ptr=0x%lx, bytes_req=%lu, bytes_alloc=%lu, gfp_flags=0x%x\n",
+           args->call_site, args->ptr, args->bytes_req, args->bytes_alloc, args->gfp_flags);
+}

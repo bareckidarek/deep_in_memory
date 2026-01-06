@@ -1,0 +1,359 @@
+{
+  "processes": [
+    {
+      "pid": 1234,
+      "name": "test_process",
+      "start_time": "2026-01-05T10:00:00Z",
+      "end_time": "2026-01-05T10:05:00Z",
+      "threads": [
+        {
+          "tid": 1234,
+          "virtual_address_ranges": [
+            {
+              "start_address": "59ef5875e000",
+              "end_address": "59ef5877e800",
+              "statuses": {
+                "INIT": ["59ef5875e000", "59ef5875f000", "59ef58760000"],
+                "SWAP": ["59ef58761000", "59ef58762000"],
+                "UNSWAP": ["59ef58761000"]
+              }
+            },
+            {
+              "start_address": "59ef58890000",
+              "end_address": "59ef588de200",
+              "statuses": {
+                "INIT": ["59ef58890000", "59ef58891000", "59ef58892000"],
+                "SWAP": ["59ef58893000"],
+                "UNSWAP": ["59ef58893000"]
+              }
+            },
+            {
+              "start_address": "59ef588e0000",
+              "end_address": "59ef5891d090",
+              "statuses": {
+                "INIT": ["59ef588e0000", "59ef588e1000", "59ef588e2000"],
+                "SWAP": ["59ef588e3000"],
+                "UNSWAP": ["59ef588e3000"]
+              }
+            },
+            {
+              "start_address": "59ef58920000",
+              "end_address": "59ef58955c20",
+              "statuses": {
+                "INIT": ["59ef58920000", "59ef58921000", "59ef58922000"],
+                "SWAP": ["59ef58923000"],
+                "UNSWAP": ["59ef58923000"]
+              }
+            },
+            {
+              "start_address": "59ef58960000",
+              "end_address": "59ef589a93e0",
+              "statuses": {
+                "INIT": ["59ef58960000", "59ef58961000", "59ef58962000"],
+                "SWAP": ["59ef58963000"],
+                "UNSWAP": ["59ef58963000"]
+              }
+            },
+            {
+              "start_address": "59ef589b0000",
+              "end_address": "59ef58a252f0",
+              "statuses": {
+                "INIT": ["59ef589b0000", "59ef589b1000", "59ef589b2000"],
+                "SWAP": ["59ef589b3000"],
+                "UNSWAP": ["59ef589b3000"]
+              }
+            },
+            {
+              "start_address": "59ef58a30000",
+              "end_address": "59ef58a6fa80",
+              "statuses": {
+                "INIT": ["59ef58a30000", "59ef58a31000", "59ef58a32000"],
+                "SWAP": ["59ef58a33000"],
+                "UNSWAP": ["59ef58a33000"]
+              }
+            },
+            {
+              "start_address": "59ef58a70000",
+              "end_address": "59ef58ab8270",
+              "statuses": {
+                "INIT": ["59ef58a70000", "59ef58a71000", "59ef58a72000"],
+                "SWAP": ["59ef58a73000"],
+                "UNSWAP": ["59ef58a73000"]
+              }
+            },
+            {
+              "start_address": "59ef58ac0000",
+              "end_address": "59ef58af3450",
+              "statuses": {
+                "INIT": ["59ef58ac0000", "59ef58ac1000", "59ef58ac2000"],
+                "SWAP": ["59ef58ac3000"],
+                "UNSWAP": ["59ef58ac3000"]
+              }
+            },
+            {
+              "start_address": "59ef58b00000",
+              "end_address": "59ef58b7a120",
+              "statuses": {
+                "INIT": ["59ef58b00000", "59ef58b01000", "59ef58b02000"],
+                "SWAP": ["59ef58b03000"],
+                "UNSWAP": ["59ef58b03000"]
+              }
+            },
+            {
+              "start_address": "59ef58b80000",
+              "end_address": "59ef58bba980",
+              "statuses": {
+                "INIT": ["59ef58b80000", "59ef58b81000", "59ef58b82000"],
+                "SWAP": ["59ef58b83000"],
+                "UNSWAP": ["59ef58b83000"]
+              }
+            },
+            {
+              "start_address": "7b9ae1d7f000",
+              "end_address": "7b9ae1dff000",
+              "statuses": {
+                "INIT": ["7b9ae1d7f000", "7b9ae1d80000", "7b9ae1d81000", "7b9ae1d82000"],
+                "SWAP": ["7b9ae1d83000"],
+                "UNSWAP": ["7b9ae1d81000"]
+              }
+            },
+            {
+              "start_address": "59ef58780000",
+              "end_address": "59ef5879f000",
+              "statuses": {
+                "INIT": ["59ef58780000", "59ef58780008"],
+                "SWAP": ["59ef58780010"],
+                "UNSWAP": ["59ef58780010"]
+              }
+            },
+            {
+              "start_address": "59ef587a0000",
+              "end_address": "59ef587c2000",
+              "statuses": {
+                "INIT": ["59ef587a0000", "59ef587a0008", "59ef587a0010"],
+                "SWAP": ["59ef587a0018"],
+                "UNSWAP": ["59ef587a0018"]
+              }
+            },
+            {
+              "start_address": "59ef587d0000",
+              "end_address": "59ef587f1000",
+              "statuses": {
+                "INIT": ["59ef587d0000", "59ef587d0008", "59ef587d0010", "59ef587d0018", "59ef587d0020"],
+                "SWAP": ["59ef587d0028"],
+                "UNSWAP": ["59ef587d0028"]
+              }
+            },
+            {
+              "start_address": "59ef58800000",
+              "end_address": "59ef58822000",
+              "statuses": {
+                "INIT": ["59ef58800000", "59ef58800008", "59ef58800010", "59ef58800018", "59ef58800020", "59ef58800028"],
+                "SWAP": ["59ef58800030"],
+                "UNSWAP": ["59ef58800030"]
+              }
+            },
+            {
+              "start_address": "59ef58830000",
+              "end_address": "59ef58852000",
+              "statuses": {
+                "INIT": ["59ef58830000", "59ef58830008", "59ef58830010", "59ef58830018", "59ef58830020", "59ef58830028", "59ef58830030"],
+                "SWAP": ["59ef58830038"],
+                "UNSWAP": ["59ef58830038"]
+              }
+            },
+            {
+              "start_address": "59ef58860000",
+              "end_address": "59ef58888000",
+              "statuses": {
+                "INIT": ["59ef58860000", "59ef58860008", "59ef58860010", "59ef58860018", "59ef58860020", "59ef58860028", "59ef58860030", "59ef58860038"],
+                "SWAP": ["59ef58860040"],
+                "UNSWAP": ["59ef58860040"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pid": 5678,
+      "name": "another_process",
+      "start_time": "2026-01-05T10:02:00Z",
+      "end_time": "2026-01-05T10:06:00Z",
+      "threads": [
+        {
+          "tid": 5678,
+          "virtual_address_ranges": [
+            {
+              "start_address": "59ef58890000",
+              "end_address": "59ef588b2000",
+              "statuses": {
+                "INIT": ["59ef58890000", "59ef58890008"],
+                "SWAP": ["59ef58890010"],
+                "UNSWAP": ["59ef58890010"]
+              }
+            },
+            {
+              "start_address": "7b9ae1e7f000",
+              "end_address": "7b9ae1f7f000",
+              "statuses": {
+                "INIT": ["7b9ae1e7f000", "7b9ae1e80000", "7b9ae1e81000"],
+                "SWAP": ["7b9ae1e82000", "7b9ae1e83000", "7b9ae1e84000"],
+                "UNSWAP": ["7b9ae1e82000"]
+              }
+            },
+            {
+              "start_address": "7b9ae1f80000",
+              "end_address": "7b9ae1fa0000",
+              "statuses": {
+                "INIT": ["7b9ae1f80000", "7b9ae1f80008"],
+                "SWAP": ["7b9ae1f80010"],
+                "UNSWAP": ["7b9ae1f80010"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pid": 9101,
+      "name": "new_process_3",
+      "start_time": "2026-01-05T10:15:00Z",
+      "end_time": "2026-01-05T10:20:00Z",
+      "threads": [
+        {
+          "tid": 9101,
+          "virtual_address_ranges": [
+            {
+              "start_address": "5aef58900000",
+              "end_address": "5aef58932000",
+              "statuses": {
+                "INIT": ["5aef58900000", "5aef58901000", "5aef58902000"],
+                "SWAP": ["5aef58903000"],
+                "UNSWAP": ["5aef58903000"]
+              }
+            },
+            {
+              "start_address": "5aef58940000",
+              "end_address": "5aef58962000",
+              "statuses": {
+                "INIT": ["5aef58940000", "5aef58941000", "5aef58942000"],
+                "SWAP": ["5aef58943000"],
+                "UNSWAP": ["5aef58943000"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pid": 11213,
+      "name": "new_process_4",
+      "start_time": "2026-01-05T10:25:00Z",
+      "end_time": "2026-01-05T10:30:00Z",
+      "threads": [
+        {
+          "tid": 11213,
+          "virtual_address_ranges": [
+            {
+              "start_address": "5bef58900000",
+              "end_address": "5bef58932000",
+              "statuses": {
+                "INIT": ["5bef58900000", "5bef58901000", "5bef58902000"],
+                "SWAP": ["5bef58903000"],
+                "UNSWAP": ["5bef58903000"]
+              }
+            },
+            {
+              "start_address": "5bef58940000",
+              "end_address": "5bef58962000",
+              "statuses": {
+                "INIT": ["5bef58940000", "5bef58941000", "5bef58942000"],
+                "SWAP": ["5bef58943000"],
+                "UNSWAP": ["5bef58943000"]
+              }
+            }
+          ]
+        },
+        {
+          "tid": 11214,
+          "virtual_address_ranges": [
+            {
+              "start_address": "5bef58980000",
+              "end_address": "5bef589b2000",
+              "statuses": {
+                "INIT": ["5bef58980000", "5bef58981000"],
+                "SWAP": ["5bef58982000"],
+                "UNSWAP": []
+              }
+            }
+          ]
+        },
+        {
+          "tid": 11215,
+          "virtual_address_ranges": [
+            {
+              "start_address": "5bef589c0000",
+              "end_address": "5bef58a02000",
+              "statuses": {
+                "INIT": ["5bef589c0000", "5bef589d0000"],
+                "SWAP": ["5bef589e0000"],
+                "UNSWAP": []
+              }
+            }
+          ]
+        },
+        {
+          "tid": 11216,
+          "virtual_address_ranges": [
+            {
+              "start_address": "5bef58a10000",
+              "end_address": "5bef58a52000",
+              "statuses": {
+                "INIT": ["5bef58a10000", "5bef58a20000"],
+                "SWAP": ["5bef58a30000"],
+                "UNSWAP": []
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "kernel_events": [
+    {
+      "event": "page_alloc",
+      "pid": 1234,
+      "timestamp": "2026-01-05T10:00:05Z",
+      "virtual_address": "0x7fff12345000",
+      "pfn": "0x12345"
+    },
+    {
+      "event": "page_free",
+      "pid": 1234,
+      "timestamp": "2026-01-05T10:00:10Z",
+      "virtual_address": "0x7fff12345000",
+      "pfn": "0x12345"
+    },
+    {
+      "event": "page_fault_user",
+      "pid": 5678,
+      "timestamp": "2026-01-05T10:02:30Z",
+      "virtual_address": "0x7fff56789000"
+    },
+    {
+      "event": "swap_writepage",
+      "pid": 5678,
+      "timestamp": "2026-01-05T10:03:00Z",
+      "virtual_address": "0x7fff56789000",
+      "pfn": "0x56789"
+    },
+    {
+      "event": "do_swap_page",
+      "pid": 5678,
+      "timestamp": "2026-01-05T10:04:00Z",
+      "virtual_address": "0x7fff56789000",
+      "pfn": "0x56789"
+    }
+  ]
+}

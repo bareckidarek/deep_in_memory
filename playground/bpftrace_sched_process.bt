@@ -1,0 +1,18 @@
+#!/usr/bin/env bpftrace
+
+tracepoint:sched:sched_process_fork
+{
+    printf("Process started: Parent PID=%d, Child PID=%d, Child Comm=%s\n",
+           args->parent_pid, args->child_pid, args->child_comm);
+}
+
+tracepoint:sched:sched_process_exit
+{
+    printf("Process exited: PID=%d, Comm=%s\n", args->pid, args->comm);
+}
+
+tracepoint:sched:sched_process_exec
+{
+    printf("Process exec: filename=%s, pid=%d, old_pid=%d\n",
+           str(args->filename), args->pid, args->old_pid);
+}
