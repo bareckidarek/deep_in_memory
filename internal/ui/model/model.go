@@ -13,6 +13,19 @@ import (
 	uirender "deep_in_memory/internal/ui/render"
 )
 
+const (
+	defaultListWidth   = 30
+	defaultListHeight  = 20
+	leftPanePadding    = 4 // border (2) + padding (2)
+	listWidthFallback  = defaultListWidth + 2
+	minAvailableWidth  = 20
+	minBarWidth        = 10
+	minContentHeight   = 6
+	minViewportHeight  = 3
+	statusBarReduction = 4
+	barWidthBuffer     = 50
+)
+
 // Model wraps the Bubble Tea state for the TUI.
 type Model struct {
 	list             list.Model
@@ -33,7 +46,7 @@ func New(d data.Dataset) *Model {
 		items = append(items, renderListItem(d.Processes[pid].Proc))
 	}
 
-	l := list.New(items, list.NewDefaultDelegate(), 30, 20)
+	l := list.New(items, list.NewDefaultDelegate(), defaultListWidth, defaultListHeight)
 	l.Title = "Processes"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
@@ -58,7 +71,7 @@ func New(d data.Dataset) *Model {
 func (m *Model) SetDataset(d data.Dataset) {
 	m.data = d
 	m.refreshList()
-	m.recomputeLayout()
+	m.syncLayout()
 }
 
 // SetTargetPIDSetter provides a callback used to push the selected PID into eBPF maps.
@@ -71,26 +84,14 @@ func (m *Model) Init() tea.Cmd { return nil }
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "enter":
-			if sel, ok := m.list.SelectedItem().(listItem); ok {
-				m.selectedPID = sel.pid
-				if m.setTargetPID != nil {
-					if err := m.setTargetPID(sel.pid); err != nil {
-						m.err = err
-					}
-				}
-				m.recomputeLayout()
-			}
-			return m, nil
+		if handler, ok := m.keyHandlers()[msg.String()]; ok {
+			return handler()
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.list.SetSize(32, m.height-2)
-		m.recomputeLayout()
+		m.list.SetSize(listWidthFallback, max(m.height-2, defaultListHeight))
+		m.syncLayout()
 	case tea.MouseMsg:
 		if msg.Type == tea.MouseWheelUp || msg.Type == tea.MouseWheelDown {
 			available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
@@ -117,8 +118,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.list, cmd = m.list.Update(adj)
 			if sel, ok := m.list.SelectedItem().(listItem); ok {
-				m.selectedPID = sel.pid
-				m.recomputeLayout()
+				m.applySelection(sel.pid, false)
 			}
 			return m, cmd
 		}
@@ -130,45 +130,47 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmdList
 }
 
-// recomputeLayout ensures viewport sizes and content stay in sync with current selection and window size.
-func (m *Model) recomputeLayout() {
+// syncLayout ensures viewport sizes and content stay in sync with current selection and window size.
+func (m *Model) syncLayout() {
 	if m.width == 0 || m.height == 0 {
 		return
 	}
-	_ = m.renderSplitDetails() // side-effects update viewport sizes/content
+	if pd, ok := m.currentProcessData(); ok {
+		m.updateViewports(pd)
+	}
 }
 
 // leftPaneWidth approximates rendered width of the bordered list box.
 func (m *Model) leftPaneWidth() int {
 	listWidth := m.list.Width()
 	if listWidth == 0 {
-		listWidth = 32
+		listWidth = listWidthFallback // default width plus default border padding used by list
 	}
-	return listWidth + 4 // border (2) + padding (2)
+	return listWidth + leftPanePadding
 }
 
 // layoutMetrics returns key layout values used for routing events and rendering.
 func (m *Model) layoutMetrics() (available, rowHeight, secondRowHeight, barWidth int) {
 	available = m.width - m.leftPaneWidth()
-	if available < 20 {
-		available = 20
+	if available < minAvailableWidth {
+		available = minAvailableWidth
 	}
-	barWidth = available - 50
-	if barWidth < 10 {
-		barWidth = 10
+	barWidth = available - barWidthBuffer
+	if barWidth < minBarWidth {
+		barWidth = minBarWidth
 	}
 
-	contentHeight := m.height - 4
-	if contentHeight < 6 {
-		contentHeight = 6
+	contentHeight := m.height - statusBarReduction
+	if contentHeight < minContentHeight {
+		contentHeight = minContentHeight
 	}
 	rowHeight = contentHeight / 2
-	if rowHeight < 6 {
-		rowHeight = 6
+	if rowHeight < minContentHeight {
+		rowHeight = minContentHeight
 	}
 	secondRowHeight = contentHeight - rowHeight
-	if secondRowHeight < 6 {
-		secondRowHeight = 6
+	if secondRowHeight < minContentHeight {
+		secondRowHeight = minContentHeight
 	}
 
 	return
@@ -187,49 +189,14 @@ func (m *Model) View() string {
 }
 
 func (m *Model) renderSplitDetails() string {
-	pd, ok := m.data.Processes[m.selectedPID]
+	pd, ok := m.currentProcessData()
 	if !ok {
 		return "Select a process to view details"
 	}
 
-	proc := pd.Proc
+	m.updateViewports(pd)
 
-	available, rowHeight, secondRowHeight, barWidth := m.layoutMetrics()
-
-	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
-	summary := fmt.Sprintf("Process: %s (%d)\nStart (UTC): %s\nEvents: %d\nVirtual pages: %d\nPFNs: %d\nVirtual usage: %s\n",
-		proc.Name, proc.PID,
-		startUTC,
-		len(pd.Events),
-		uirender.ActiveVirtualCount(pd.Virtual),
-		len(pd.PFNs),
-		uirender.HumanBytes(int64(uirender.ActiveVirtualCount(pd.Virtual))*data.PageSizeBytes),
-	)
-
-	// Update viewport sizes based on available dimensions and padding/border (border=2 width, padding=2 width total).
-	virtualWidth := available - 4
-	if virtualWidth < 10 {
-		virtualWidth = 10
-	}
-	physicalWidth := virtualWidth
-
-	virtualHeight := rowHeight - 2
-	if virtualHeight < 3 {
-		virtualHeight = 3
-	}
-	physicalHeight := secondRowHeight - 2
-	if physicalHeight < 3 {
-		physicalHeight = 3
-	}
-
-	m.viewportVirtual.Width = virtualWidth
-	m.viewportVirtual.Height = virtualHeight
-	m.viewportPhysical.Width = physicalWidth
-	m.viewportPhysical.Height = physicalHeight
-
-	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth))
-	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(pd))
-
+	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(available)
 	virtualBox := box.Height(rowHeight).Render(m.viewportVirtual.View())
 	physicalBox := box.Height(secondRowHeight).Render(m.viewportPhysical.View())
@@ -262,21 +229,114 @@ func (m *Model) refreshList() {
 		}
 	}
 	m.list.SetItems(items)
-	// Keep selection stable if possible; otherwise choose the first item.
+	selectionChanged := m.ensureSelection(items)
+	if selectionChanged {
+		m.syncLayout()
+	}
+}
+
+// applySelection updates the selected PID and optionally pushes it to the eBPF map.
+func (m *Model) applySelection(pid int, pushToEBPF bool) {
+	m.selectedPID = pid
+	if pushToEBPF && m.setTargetPID != nil {
+		if err := m.setTargetPID(pid); err != nil {
+			m.err = err
+		}
+	}
+	m.syncLayout()
+}
+
+// ensureSelection keeps current selection if available or falls back to the first item.
+func (m *Model) ensureSelection(items []list.Item) bool {
 	if m.selectedPID != 0 {
 		for idx, item := range items {
 			if li, ok := item.(listItem); ok && li.pid == m.selectedPID {
 				m.list.Select(idx)
-				return
+				return true
 			}
 		}
 	}
+
 	if len(items) > 0 {
 		if li, ok := items[0].(listItem); ok {
 			m.selectedPID = li.pid
 			m.list.Select(0)
+			return true
 		}
-	} else {
-		m.selectedPID = 0
 	}
+
+	m.selectedPID = 0
+	return false
+}
+
+func (m *Model) currentProcessData() (*data.ProcessData, bool) {
+	pd, ok := m.data.Processes[m.selectedPID]
+	return pd, ok
+}
+
+// updateViewports recalculates sizes and content for both panes based on current layout.
+func (m *Model) updateViewports(pd *data.ProcessData) {
+	if pd == nil {
+		return
+	}
+
+	available, rowHeight, secondRowHeight, barWidth := m.layoutMetrics()
+	proc := pd.Proc
+	virtualCount := uirender.ActiveVirtualCount(pd.Virtual)
+	summary := m.renderSummary(proc, pd, virtualCount)
+
+	virtualWidth := available - leftPanePadding
+	if virtualWidth < minBarWidth {
+		virtualWidth = minBarWidth
+	}
+	physicalWidth := virtualWidth
+
+	virtualHeight := rowHeight - 2
+	if virtualHeight < minViewportHeight {
+		virtualHeight = minViewportHeight
+	}
+	physicalHeight := secondRowHeight - 2
+	if physicalHeight < minViewportHeight {
+		physicalHeight = minViewportHeight
+	}
+
+	m.viewportVirtual.Width = virtualWidth
+	m.viewportVirtual.Height = virtualHeight
+	m.viewportPhysical.Width = physicalWidth
+	m.viewportPhysical.Height = physicalHeight
+
+	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth))
+	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(pd))
+}
+
+func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCount int) string {
+	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
+	return fmt.Sprintf("Process: %s (%d)\nStart (UTC): %s\nEvents: %d\nVirtual pages: %d\nPFNs: %d\nVirtual usage: %s\n",
+		proc.Name, proc.PID,
+		startUTC,
+		len(pd.Events),
+		virtualCount,
+		len(pd.PFNs),
+		uirender.HumanBytes(int64(virtualCount)*data.PageSizeBytes),
+	)
+}
+
+func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
+	return map[string]func() (tea.Model, tea.Cmd){
+		"q":      func() (tea.Model, tea.Cmd) { return m, tea.Quit },
+		"ctrl+c": func() (tea.Model, tea.Cmd) { return m, tea.Quit },
+		"enter": func() (tea.Model, tea.Cmd) {
+			if sel, ok := m.list.SelectedItem().(listItem); ok {
+				m.applySelection(sel.pid, true)
+			}
+			return m, nil
+		},
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

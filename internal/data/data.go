@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
 	"strconv"
@@ -94,12 +95,21 @@ func BuildDataset(processes []ProcessData) Dataset {
 		ds.Order = append(ds.Order, pid)
 	}
 
+	// Cache process data to avoid repeated map lookups in sort
+	type procSort struct {
+		pid       int
+		startTime time.Time
+	}
+	sortCache := make([]procSort, len(ds.Order))
+	for i, pid := range ds.Order {
+		sortCache[i] = procSort{pid: pid, startTime: ds.Processes[pid].Proc.StartTime}
+	}
 	sort.Slice(ds.Order, func(i, j int) bool {
-		a, b := ds.Processes[ds.Order[i]], ds.Processes[ds.Order[j]]
-		if a.Proc.StartTime.Equal(b.Proc.StartTime) {
-			return a.Proc.PID < b.Proc.PID
+		a, b := sortCache[i], sortCache[j]
+		if a.startTime.Equal(b.startTime) {
+			return a.pid < b.pid
 		}
-		return a.Proc.StartTime.Before(b.Proc.StartTime)
+		return a.startTime.Before(b.startTime)
 	})
 
 	return ds
@@ -109,12 +119,12 @@ func BuildDataset(processes []ProcessData) Dataset {
 func LoadData(path string) (Dataset, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return Dataset{}, err
+		return Dataset{}, fmt.Errorf("failed to read file %q: %w", path, err)
 	}
 
 	var raw rawData
 	if err := json.Unmarshal(content, &raw); err != nil {
-		return Dataset{}, err
+		return Dataset{}, fmt.Errorf("failed to parse JSON from %q: %w", path, err)
 	}
 
 	procMap := make(map[int]Process)
@@ -201,13 +211,21 @@ func LoadData(path string) (Dataset, error) {
 		}
 	}
 
-	// Keep process order stable by start time.
+	// Keep process order stable by start time (cache lookups)
+	type procSort struct {
+		pid       int
+		startTime time.Time
+	}
+	sortCache := make([]procSort, len(ds.Order))
+	for i, pid := range ds.Order {
+		sortCache[i] = procSort{pid: pid, startTime: procMap[pid].StartTime}
+	}
 	sort.Slice(ds.Order, func(i, j int) bool {
-		a, b := procMap[ds.Order[i]], procMap[ds.Order[j]]
-		if a.StartTime.Equal(b.StartTime) {
-			return a.PID < b.PID
+		a, b := sortCache[i], sortCache[j]
+		if a.startTime.Equal(b.startTime) {
+			return a.pid < b.pid
 		}
-		return a.StartTime.Before(b.StartTime)
+		return a.startTime.Before(b.startTime)
 	})
 
 	return ds, nil

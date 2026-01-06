@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
+	"log"
 	"os/signal"
 	"syscall"
 	"time"
@@ -23,15 +22,13 @@ func main() {
 
 	store, err := storedb.New[data.ProcessData]("deep_in_memory")
 	if err != nil {
-		fmt.Println("failed to open bolt db:", err)
-		os.Exit(1)
+		log.Fatalf("failed to open bolt db: %v", err)
 	}
 	defer store.Close()
 
 	initialProcs, err := store.All()
 	if err != nil {
-		fmt.Println("failed to read initial data:", err)
-		os.Exit(1)
+		log.Fatalf("failed to read initial data: %v", err)
 	}
 	initial := data.BuildDataset(initialProcs)
 	appModel := app.New(store, initial, time.Second)
@@ -39,14 +36,12 @@ func main() {
 
 	cleanup, setTargetPID, err := sched.Start(ctx, p.Send)
 	if err != nil {
-		fmt.Println("failed to start eBPF collector:", err)
-		os.Exit(1)
+		log.Fatalf("failed to start eBPF collector: %v", err)
 	}
 	appModel.SetTargetPIDSetter(setTargetPID)
 	defer cleanup()
 
 	if err := p.Start(); err != nil {
-		fmt.Println("tui error:", err)
-		os.Exit(1)
+		log.Fatalf("tui error: %v", err)
 	}
 }

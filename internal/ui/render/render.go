@@ -11,6 +11,14 @@ import (
 	"deep_in_memory/internal/data"
 )
 
+var statusOrder = []string{"INIT", "SWAP", "UNSWAP"}
+
+const (
+	matrixColumns    = 8
+	matrixMaxRows    = 6
+	phaseSampleLimit = 5
+)
+
 // ActiveVirtualCount returns the number of non-freed virtual pages.
 func ActiveVirtualCount(vmap map[string]*data.VirtualPage) int {
 	count := 0
@@ -38,56 +46,53 @@ func HumanBytes(b int64) string {
 
 // RenderVirtualSectionContent builds the virtual memory section text.
 func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int) string {
-	virtMatrix := renderMatrix("Virtual", virtualKeys(pd.Virtual))
-	phases := renderPhases(pd.Virtual)
-	ranges := renderThreadRanges(pd, barWidth)
-
-	return strings.Join([]string{
+	return renderSection(
 		"[virtual memory]",
 		summary,
-		ranges,
-		phases,
-		virtMatrix,
-	}, "\n")
+		renderThreadRanges(pd.Threads, barWidth),
+		renderPhases(pd.Virtual),
+		renderMatrix("Virtual", virtualKeys(pd.Virtual)),
+	)
 }
 
 // RenderPhysicalSectionContent builds the physical memory section text.
 func RenderPhysicalSectionContent(pd *data.ProcessData) string {
-	pfnMatrix := renderMatrix("PFN", pfnKeys(pd.PFNs))
-	physicalSummary := fmt.Sprintf("PFNs: %d\nPhysical usage: %s\n",
+	phSummary := fmt.Sprintf("PFNs: %d\nPhysical usage: %s\n",
 		len(pd.PFNs), HumanBytes(int64(len(pd.PFNs))*data.PageSizeBytes))
-	return strings.Join([]string{
+	return renderSection(
 		"[physical memory]",
-		physicalSummary,
-		pfnMatrix,
-	}, "\n")
+		phSummary,
+		renderMatrix("PFN", pfnKeys(pd.PFNs)),
+	)
 }
 
-func renderThreadRanges(pd *data.ProcessData, barWidth int) string {
-	if len(pd.Threads) == 0 {
+func renderSection(title string, parts ...string) string {
+	compact := make([]string, 0, len(parts)+1)
+	compact = append(compact, title)
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		compact = append(compact, part)
+	}
+	return strings.Join(compact, "\n")
+}
+
+func renderThreadRanges(threads []data.ThreadData, barWidth int) string {
+	if len(threads) == 0 {
 		return "Virtual ranges: none"
 	}
 
 	var b strings.Builder
 	b.WriteString("Virtual ranges (by thread):\n")
-	for tIdx, th := range pd.Threads {
-		threadConnector := "├─"
-		if tIdx == len(pd.Threads)-1 {
-			threadConnector = "└─"
-		}
-		b.WriteString(fmt.Sprintf("%s %d\n", threadConnector, th.TID))
-
-		rangePrefix := "│  "
-		if threadConnector == "└─" {
-			rangePrefix = "   "
-		}
+	for tIdx, th := range threads {
+		connector := treeConnector(tIdx, len(threads))
+		b.WriteString(fmt.Sprintf("%s %d\n", connector, th.TID))
+		prefix := branchPrefix(connector)
 
 		for rIdx, r := range th.Ranges {
-			rangeConnector := "├─"
-			if rIdx == len(th.Ranges)-1 {
-				rangeConnector = "└─"
-			}
-			b.WriteString(fmt.Sprintf("%s%s %s\n", rangePrefix, rangeConnector, renderRangeBar(r, barWidth)))
+			rangeConn := treeConnector(rIdx, len(th.Ranges))
+			b.WriteString(fmt.Sprintf("%s%s %s\n", prefix, rangeConn, renderRangeBar(r, barWidth)))
 		}
 	}
 
@@ -99,40 +104,23 @@ func renderRangeBar(r data.AddrRange, barWidth int) string {
 		return fmt.Sprintf("%s [invalid range] %s", r.Start, r.End)
 	}
 
-	// Count pages per status; default state (0/null) is implicit.
-	counts := map[string]int{
-		"INIT":   len(r.Statuses["INIT"]),
-		"SWAP":   len(r.Statuses["SWAP"]),
-		"UNSWAP": len(r.Statuses["UNSWAP"]),
-	}
-
 	totalWidthUsed := 0
-	segments := make([]string, 0, 4)
-
-	for _, status := range []string{"INIT", "SWAP", "UNSWAP"} {
-		pages := counts[status]
-		if pages == 0 {
-			continue
-		}
-		width := int(math.Round(float64(pages*data.PageSizeBytes) / float64(r.Size) * float64(barWidth)))
-		if width == 0 {
-			width = 1
-		}
-		if totalWidthUsed+width > barWidth {
-			width = barWidth - totalWidthUsed
-		}
+	segments := make([]string, 0, len(statusOrder)+1)
+	for _, status := range statusOrder {
+		pages := len(r.Statuses[status])
+		width := statusSegmentWidth(pages, r.Size, barWidth-totalWidthUsed)
 		if width <= 0 {
 			continue
 		}
-		segments = append(segments, lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus(status))).Render(strings.Repeat(" ", width)))
+		segments = append(segments, statusBlock(status, width))
 		totalWidthUsed += width
 		if totalWidthUsed >= barWidth {
 			break
 		}
 	}
 
-	if totalWidthUsed < barWidth {
-		segments = append(segments, lipgloss.NewStyle().Background(lipgloss.Color("#666666")).Render(strings.Repeat(" ", barWidth-totalWidthUsed)))
+	if remainder := barWidth - totalWidthUsed; remainder > 0 {
+		segments = append(segments, grayBlock(remainder))
 	}
 
 	bar := strings.Join(segments, "")
@@ -153,22 +141,58 @@ func colorForStatus(status string) string {
 	}
 }
 
+func statusSegmentWidth(pages int, rangeSize uint64, availableWidth int) int {
+	if pages <= 0 || rangeSize == 0 || availableWidth <= 0 {
+		return 0
+	}
+	portion := float64(pages*data.PageSizeBytes) / float64(rangeSize)
+	width := int(math.Round(portion * float64(availableWidth)))
+	if width == 0 {
+		width = 1
+	}
+	if width > availableWidth {
+		return availableWidth
+	}
+	return width
+}
+
+func statusBlock(status string, width int) string {
+	return lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus(status))).Render(strings.Repeat(" ", width))
+}
+
+func grayBlock(width int) string {
+	return lipgloss.NewStyle().Background(lipgloss.Color("#666666")).Render(strings.Repeat(" ", width))
+}
+
+func treeConnector(idx, total int) string {
+	if idx == total-1 {
+		return "└─"
+	}
+	return "├─"
+}
+
+func branchPrefix(connector string) string {
+	if connector == "└─" {
+		return "   "
+	}
+	return "│  "
+}
+
 func renderMatrix(label string, entries []string) string {
 	if len(entries) == 0 {
 		return fmt.Sprintf("%s matrix: none", label)
 	}
-	cols := 8
-	rows := (len(entries) + cols - 1) / cols
-	if rows > 6 {
-		rows = 6 // cap rows to keep view compact
+	rows := (len(entries) + matrixColumns - 1) / matrixColumns
+	if rows > matrixMaxRows {
+		rows = matrixMaxRows // cap rows to keep view compact
 	}
-	maxCells := rows * cols
+	maxCells := rows * matrixColumns
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("%s matrix (%d shown):\n", label, min(len(entries), maxCells)))
 
 	for i := 0; i < maxCells && i < len(entries); i++ {
-		if i%cols == 0 && i != 0 {
+		if i%matrixColumns == 0 && i != 0 {
 			b.WriteString("\n")
 		}
 		b.WriteString(fmt.Sprintf("[%s] ", shorten(entries[i])))
@@ -207,8 +231,8 @@ func renderPhases(vmap map[string]*data.VirtualPage) string {
 			continue
 		}
 		samples := addrs
-		if len(addrs) > 5 {
-			samples = addrs[:5]
+		if len(addrs) > phaseSampleLimit {
+			samples = addrs[:phaseSampleLimit]
 		}
 		b.WriteString(fmt.Sprintf("- %s: %d (e.g., %s)\n", ph, len(addrs), strings.Join(samples, ", ")))
 	}
