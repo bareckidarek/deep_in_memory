@@ -9,10 +9,8 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 struct event {
     __u64 ts;
-    __u32 type; // 1=fork, 2=exit
+    __u32 type; // 1=exec, 2=exit
     __u32 pid;
-    __u32 ppid;
-    __u32 child_pid;
     char comm[16];
 };
 
@@ -41,15 +39,13 @@ static __always_inline int submit_event(struct event *e) {
     return 0;
 }
 
-SEC("tracepoint/sched/sched_process_fork")
-int handle_fork(struct trace_event_raw_sched_process_fork *ctx) {
+SEC("tracepoint/sched/sched_process_exec")
+int handle_exec(struct trace_event_raw_sched_process_exec *ctx) {
     struct event e = {};
     e.ts = bpf_ktime_get_tai_ns();
     e.type = 1;
-    e.pid = ctx->parent_pid;
-    e.ppid = ctx->parent_pid; // parent_pid reflects parent; keep for parity
-    e.child_pid = ctx->child_pid;
-    bpf_probe_read_kernel_str(&e.comm, sizeof(e.comm), ctx->child_comm);
+    e.pid = ctx->pid;
+    bpf_get_current_comm(&e.comm, sizeof(e.comm));
     return submit_event(&e);
 }
 

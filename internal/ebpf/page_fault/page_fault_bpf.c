@@ -61,14 +61,19 @@ int handle_page_fault_user(struct page_fault_user_args *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
     
-    // Check target_pid filter - skip if no target set
+    // Check target_pid filter
     __u32 key = 0;
     __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
+    if (!target) {
+        return 0; // Map lookup failed
+    }
     if (!target || *target == 0) {
         return 0; // No target set, skip
     }
-    if (pid != *target) {
-        return 0; // Not the target PID
+    // 0: allow all processes
+    // >0: filter by specific PID
+    if (*target > 0 && pid != (__u32)*target) {
+        return 0;
     }
     
     e.ts = bpf_ktime_get_tai_ns();

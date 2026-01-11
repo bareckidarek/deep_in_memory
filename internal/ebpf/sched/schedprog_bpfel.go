@@ -13,12 +13,10 @@ import (
 )
 
 type SchedProgEvent struct {
-	Ts       uint64
-	Type     uint32
-	Pid      uint32
-	Ppid     uint32
-	ChildPid uint32
-	Comm     [16]int8
+	Ts   uint64
+	Type uint32
+	Pid  uint32
+	Comm [16]int8
 }
 
 // LoadSchedProg returns the embedded CollectionSpec for SchedProg.
@@ -62,8 +60,8 @@ type SchedProgSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type SchedProgProgramSpecs struct {
+	HandleExec *ebpf.ProgramSpec `ebpf:"handle_exec"`
 	HandleExit *ebpf.ProgramSpec `ebpf:"handle_exit"`
-	HandleFork *ebpf.ProgramSpec `ebpf:"handle_fork"`
 }
 
 // SchedProgMapSpecs contains maps before they are loaded into the kernel.
@@ -108,14 +106,14 @@ func (m *SchedProgMaps) Close() error {
 //
 // It can be passed to LoadSchedProgObjects or ebpf.CollectionSpec.LoadAndAssign.
 type SchedProgPrograms struct {
+	HandleExec *ebpf.Program `ebpf:"handle_exec"`
 	HandleExit *ebpf.Program `ebpf:"handle_exit"`
-	HandleFork *ebpf.Program `ebpf:"handle_fork"`
 }
 
 func (p *SchedProgPrograms) Close() error {
 	return _SchedProgClose(
+		p.HandleExec,
 		p.HandleExit,
-		p.HandleFork,
 	)
 }
 

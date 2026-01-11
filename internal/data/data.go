@@ -7,10 +7,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
-const PageSizeBytes = 4096
+var PageSizeBytes uint64
+
+func init() {
+	PageSizeBytes = uint64(syscall.Getpagesize())
+}
 
 // Process mirrors a process definition.
 type Process struct {
@@ -51,6 +56,36 @@ type ThreadData struct {
 	Ranges []AddrRange
 }
 
+// StatusCount tracks count of addresses in a particular status.
+type StatusCount struct {
+	Count int `json:"count"`
+}
+
+// incrementStatus increments the count for a given status in the range.
+func (r *AddrRange) incrementStatus(status string) {
+	if r.Statuses == nil {
+		r.Statuses = make(map[string]*StatusCount)
+	}
+	if r.Statuses[status] == nil {
+		r.Statuses[status] = &StatusCount{}
+	}
+	r.Statuses[status].Count++
+}
+
+// decrementStatus decrements the count for a given status in the range.
+// If count goes below 0, it's clamped to 0.
+func (r *AddrRange) decrementStatus(status string) {
+	if r.Statuses == nil {
+		return
+	}
+	if r.Statuses[status] != nil {
+		r.Statuses[status].Count--
+		if r.Statuses[status].Count < 0 {
+			r.Statuses[status].Count = 0
+		}
+	}
+}
+
 // AddrRange represents a virtual address range and statuses.
 type AddrRange struct {
 	Start    string
@@ -58,7 +93,8 @@ type AddrRange struct {
 	StartVal uint64
 	EndVal   uint64
 	Size     uint64
-	Statuses map[string][]string
+	Statuses map[string]*StatusCount
+	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
 }
 
 // Dataset is the top-level data container.
@@ -99,11 +135,100 @@ func (pd *ProcessData) AddMmapRange(tid int, addr, length uint64) {
 		End:      fmt.Sprintf("%x", endAddr),
 		StartVal: startAddr,
 		EndVal:   endAddr,
-		Size:     length,
-		Statuses: make(map[string][]string),
+		Size:     length / PageSizeBytes,
+		Statuses: make(map[string]*StatusCount),
 	}
 
 	pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
+}
+
+// ExtendBrkRange extends the heap range for a thread based on brk syscall.
+// If brk==0, ret contains the current program break (start address).
+// Otherwise, brk is the requested end address and ret is the actual end address allocated.
+func (pd *ProcessData) ExtendBrkRange(tid int, brk, ret uint64) {
+	if pd.Threads == nil {
+		pd.Threads = []ThreadData{}
+	}
+
+	// Find or create thread
+	var threadIdx = -1
+	for i, th := range pd.Threads {
+		if th.TID == tid {
+			threadIdx = i
+			break
+		}
+	}
+
+	if threadIdx == -1 {
+		// Create new thread
+		pd.Threads = append(pd.Threads, ThreadData{
+			TID:    tid,
+			Ranges: []AddrRange{},
+		})
+		threadIdx = len(pd.Threads) - 1
+	}
+
+	// If brk==0, this is a query - ret contains the current break
+	if brk == 0 {
+		// Find existing heap range or create new one
+		heapIdx := -1
+		for i, r := range pd.Threads[threadIdx].Ranges {
+			if r.Label == "[heap]" {
+				heapIdx = i
+				break
+			}
+		}
+
+		if heapIdx == -1 {
+			// Create initial heap range (start == end == ret)
+			newRange := AddrRange{
+				Start:    fmt.Sprintf("%x", ret),
+				End:      fmt.Sprintf("%x", ret),
+				StartVal: ret,
+				EndVal:   ret,
+				Size:     0,
+				Statuses: make(map[string]*StatusCount),
+				Label:    "[heap]",
+			}
+			pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
+		}
+		return
+	}
+
+	// brk != 0: extending or shrinking the heap
+	// Find existing heap range
+	heapIdx := -1
+	for i, r := range pd.Threads[threadIdx].Ranges {
+		if r.Label == "[heap]" {
+			heapIdx = i
+			break
+		}
+	}
+
+	if heapIdx == -1 {
+		// No heap range exists yet, create one with ret as both start and end
+		// This shouldn't normally happen, but handle it
+		return
+	}
+
+	// Extend the existing heap range
+	heap := &pd.Threads[threadIdx].Ranges[heapIdx]
+	if ret > heap.EndVal {
+		// Heap is growing
+		heap.End = fmt.Sprintf("%x", ret)
+		heap.EndVal = ret
+		heap.Size = (ret - heap.StartVal) / PageSizeBytes
+	} else if ret < heap.EndVal {
+		// Heap is shrinking
+		heap.End = fmt.Sprintf("%x", ret)
+		heap.EndVal = ret
+		if ret > heap.StartVal {
+			heap.Size = (ret - heap.StartVal) / PageSizeBytes
+		} else {
+			heap.Size = 0
+		}
+	}
+	// If ret == heap.EndVal, no change needed
 }
 
 // AddPageFault finds the virtual address range containing the faulted address
@@ -128,28 +253,70 @@ func (pd *ProcessData) AddPageFault(tid int, faultAddr uint64) {
 	}
 
 	// Find range containing faultAddr
-	for rangeIdx, r := range pd.Threads[threadIdx].Ranges {
+	for rangeIdx := range pd.Threads[threadIdx].Ranges {
+		r := &pd.Threads[threadIdx].Ranges[rangeIdx]
 		if faultAddr >= r.StartVal && faultAddr < r.EndVal {
-			// Found the range
-			if pd.Threads[threadIdx].Ranges[rangeIdx].Statuses == nil {
-				pd.Threads[threadIdx].Ranges[rangeIdx].Statuses = make(map[string][]string)
-			}
-
-			addrHex := fmt.Sprintf("%x", faultAddr)
-
-			// Check if already present
-			initList := pd.Threads[threadIdx].Ranges[rangeIdx].Statuses["INIT"]
-			for _, existing := range initList {
-				if existing == addrHex {
-					return // Already tracked
-				}
-			}
-
-			// Add to INIT status
-			pd.Threads[threadIdx].Ranges[rangeIdx].Statuses["INIT"] = append(initList, addrHex)
+			// Found the range - increment INIT count
+			r.incrementStatus("INIT")
 			return
 		}
 	}
+}
+
+// AddSwapStatus finds the virtual address range containing the swap address
+// and adds it to Statuses["SWAP"] or Statuses["UNSWAP"] based on isSwap flag.
+func (pd *ProcessData) AddSwapStatus(tid int, swapAddr uint64, isSwap bool) {
+	if pd.Threads == nil {
+		return
+	}
+
+	// Try to find thread by TID first
+	threadIdx := -1
+	for i, th := range pd.Threads {
+		if th.TID == tid {
+			threadIdx = i
+			break
+		}
+	}
+
+	// If not found by TID, search all threads (similar to AddPageFault)
+	if threadIdx == -1 {
+		// Try all threads
+		for i := range pd.Threads {
+			if pd.addSwapToThread(i, swapAddr, isSwap) {
+				return
+			}
+		}
+		return
+	}
+
+	// Found by TID, try to add to this thread
+	pd.addSwapToThread(threadIdx, swapAddr, isSwap)
+}
+
+func (pd *ProcessData) addSwapToThread(threadIdx int, swapAddr uint64, isSwap bool) bool {
+	// Find range containing swapAddr
+	for rangeIdx := range pd.Threads[threadIdx].Ranges {
+		r := &pd.Threads[threadIdx].Ranges[rangeIdx]
+		if swapAddr >= r.StartVal && swapAddr < r.EndVal {
+			// Found the range
+			if isSwap {
+				// swap_writepage: SWAP++, INIT--
+				r.incrementStatus("SWAP")
+				r.decrementStatus("INIT")
+			} else {
+				// do_swap_page: UNSWAP++, SWAP--
+				r.incrementStatus("UNSWAP")
+				r.decrementStatus("SWAP")
+				// If SWAP went to 0, also decrement INIT
+				if r.Statuses != nil && r.Statuses["SWAP"] != nil && r.Statuses["SWAP"].Count <= 0 {
+					r.decrementStatus("INIT")
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // RemoveMmapRange removes or marks freed a virtual address range for munmap.
@@ -304,13 +471,20 @@ func convertRanges(rawRanges []rawRange) []AddrRange {
 		if err1 != nil || err2 != nil || end <= start {
 			continue
 		}
+		// Convert raw statuses to StatusCount
+		statuses := make(map[string]*StatusCount)
+		for key, val := range rr.Statuses {
+			if val != nil {
+				statuses[key] = val
+			}
+		}
 		ranges = append(ranges, AddrRange{
 			Start:    rr.StartAddress,
 			End:      rr.EndAddress,
 			StartVal: start,
 			EndVal:   end,
 			Size:     end - start,
-			Statuses: rr.Statuses,
+			Statuses: statuses,
 		})
 	}
 	return ranges
@@ -336,9 +510,9 @@ type rawThread struct {
 }
 
 type rawRange struct {
-	StartAddress string              `json:"start_address"`
-	EndAddress   string              `json:"end_address"`
-	Statuses     map[string][]string `json:"statuses"`
+	StartAddress string                  `json:"start_address"`
+	EndAddress   string                  `json:"end_address"`
+	Statuses     map[string]*StatusCount `json:"statuses"`
 }
 
 type rawData struct {

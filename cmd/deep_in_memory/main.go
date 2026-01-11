@@ -13,9 +13,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"deep_in_memory/internal/data"
+	"deep_in_memory/internal/ebpf/brk"
 	"deep_in_memory/internal/ebpf/mmap"
 	"deep_in_memory/internal/ebpf/page_fault"
 	"deep_in_memory/internal/ebpf/sched"
+	"deep_in_memory/internal/ebpf/swap"
 	storedb "deep_in_memory/internal/thirdparty/db"
 )
 
@@ -56,12 +58,26 @@ func main() {
 	}
 	defer mmapCleanup()
 
+	// Start brk collector with shared target_pid map
+	brkCleanup, err := brk.Start(ctx, p.Send, targetPidMap)
+	if err != nil {
+		log.Fatalf("failed to start brk eBPF collector: %v", err)
+	}
+	defer brkCleanup()
+
 	// Start page_fault collector with shared target_pid map
 	pageFaultCleanup, err := page_fault.Start(ctx, p.Send, targetPidMap)
 	if err != nil {
 		log.Fatalf("failed to start page_fault eBPF collector: %v", err)
 	}
 	defer pageFaultCleanup()
+
+	// Start swap collector with shared target_pid map
+	swapCleanup, err := swap.Start(ctx, p.Send, targetPidMap)
+	if err != nil {
+		log.Fatalf("failed to start swap eBPF collector: %v", err)
+	}
+	defer swapCleanup()
 
 	// Only sched owns the target_pid map, so we only use its setter
 	appModel.SetTargetPIDSetter(setTargetPID)

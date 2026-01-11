@@ -704,6 +704,31 @@ def main():
         wall_ts = wall_base_sec + (delta_ns / 1_000_000_000.0)
         return datetime.fromtimestamp(wall_ts).strftime("%Y-%m-%d %H:%M:%S")
 
+    # Track mmap ranges and counters for page_fault and swap_writepage
+    mmap_ranges = []  # List of (start, end) tuples
+    page_fault_counters = {}  # {range_idx: count}
+    swap_writepage_counters = {}  # {range_idx: count}
+    do_swap_page_counters = {}  # {range_idx: count}
+
+    def find_range_for_addr(addr):
+        """Find which mmap range contains the given address."""
+        for idx, (start, end) in enumerate(mmap_ranges):
+            if start <= addr < end:
+                return idx
+        return None
+
+    def print_ranges_summary():
+        """Print summary of all ranges with their counters."""
+        if not mmap_ranges:
+            return ""
+        lines = []
+        for idx, (start, end) in enumerate(mmap_ranges):
+            pf_count = page_fault_counters.get(idx, 0)
+            sw_count = swap_writepage_counters.get(idx, 0)
+            ds_count = do_swap_page_counters.get(idx, 0)
+            lines.append(f"[0x{start:x} - 0x{end:x}, pf:{pf_count}, sw:{sw_count}, ds:{ds_count}]")
+        return "\n".join(lines)
+
     def handle_malloc_event(cpu, data, size):
         event = ctypes.cast(data, ctypes.POINTER(MallocEvent)).contents
         comm = event.comm.split(b"\0", 1)[0].decode(errors="replace")
@@ -734,9 +759,16 @@ def main():
         event = ctypes.cast(data, ctypes.POINTER(MmapEvent)).contents
         comm = event.comm.split(b"\0", 1)[0].decode(errors="replace")
         ts_fmt = format_ts(event.ts_ns)
+        
+        # Track mmap range
+        if event.ret != 0 and event.ret != 0xffffffffffffffff:  # Valid mmap
+            start = event.ret
+            end = event.ret + event.len
+            mmap_ranges.append((start, end))
+        
         print(
             f"{ts_fmt} pid={event.pid} tid={event.tid} "
-            f"mmap comm={comm} len={event.len} "
+            f"mmap comm={comm} len=0x{event.len:x} "
             f"prot=0x{event.prot:x} flags=0x{event.flags:x} fd={event.fd} pgoff={event.pgoff} ret=0x{event.ret:x}"
         )
 
@@ -769,36 +801,68 @@ def main():
         event = ctypes.cast(data, ctypes.POINTER(PageFaultEvent)).contents
         comm = event.comm.split(b"\0", 1)[0].decode(errors="replace")
         ts_fmt = format_ts(event.ts_ns)
+        
+        # Track page fault in range
+        range_idx = find_range_for_addr(event.address)
+        if range_idx is not None:
+            page_fault_counters[range_idx] = page_fault_counters.get(range_idx, 0) + 1
+        
+        # Print with ranges summary
+        ranges_info = print_ranges_summary()
         print(
             f"{ts_fmt} pid={event.pid} tid={event.tid} "
-            f"page_fault_user comm={comm} addr=0x{event.address:x} ip=0x{event.ip:x} error=0x{event.error_code:x}"
+            f"page_fault_user comm={comm} addr=0x{event.address:x} ip=0x{event.ip:x} error=0x{event.error_code:x}\n"
+            f"{ranges_info}"
         )
 
     def handle_swap_event(cpu, data, size):
         event = ctypes.cast(data, ctypes.POINTER(SwapEvent)).contents
         comm = event.comm.split(b"\0", 1)[0].decode(errors="replace")
         ts_fmt = format_ts(event.ts_ns)
+        
+        # Track do_swap_page in range
+        if event.ret == 0:  # Only count successful swaps
+            range_idx = find_range_for_addr(event.address)
+            if range_idx is not None:
+                do_swap_page_counters[range_idx] = do_swap_page_counters.get(range_idx, 0) + 1
+        
+        # Print with ranges summary
+        ranges_info = print_ranges_summary()
         print(
             f"{ts_fmt} pid={event.pid} tid={event.tid} "
-            f"do_swap_page comm={comm} addr=0x{event.address:x} pgoff=0x{event.pgoff:x} ret=0x{event.ret:x}"
+            f"do_swap_page comm={comm} addr=0x{event.address:x} pgoff=0x{event.pgoff:x} ret=0x{event.ret:x}\n"
+            f"{ranges_info}"
         )
 
     def handle_swap_writepage_event(cpu, data, size):
         event = ctypes.cast(data, ctypes.POINTER(SwapWritepageEvent)).contents
         comm = event.comm.split(b"\0", 1)[0].decode(errors="replace")
         ts_fmt = format_ts(event.ts_ns)
+        
+        # vaddr needs to be shifted left by 12 bits (add 000 at the end)
+        actual_addr = event.vaddr << 12
+        
+        # Track swap_writepage in range
+        if event.ret == 0:  # Only count successful writepages
+            range_idx = find_range_for_addr(actual_addr)
+            if range_idx is not None:
+                swap_writepage_counters[range_idx] = swap_writepage_counters.get(range_idx, 0) + 1
+        
+        # Print with ranges summary
+        ranges_info = print_ranges_summary()
         print(
             f"{ts_fmt} pid={event.pid} tid={event.tid} "
-            f"swap_writepage comm={comm} page=0x{event.page_ptr:x} vaddr=0x{event.vaddr:x} ret=0x{event.ret:x}"
+            f"swap_writepage comm={comm} page=0x{event.page_ptr:x} vaddr=0x{actual_addr:x} ret=0x{event.ret:x}\n"
+            f"{ranges_info}"
         )
 
     b["malloc_events"].open_perf_buffer(handle_malloc_event, page_cnt=PERF_PAGES)
-    b["free_events"].open_perf_buffer(handle_free_event, page_cnt=PERF_PAGES)
+    # b["free_events"].open_perf_buffer(handle_free_event, page_cnt=PERF_PAGES)
     b["brk_events"].open_perf_buffer(handle_brk_event, page_cnt=PERF_PAGES)
     b["mmap_events"].open_perf_buffer(handle_mmap_event, page_cnt=PERF_PAGES)
-    b["munmap_events"].open_perf_buffer(handle_munmap_event, page_cnt=PERF_PAGES)
-    b["page_alloc_events"].open_perf_buffer(handle_page_alloc_event, page_cnt=PERF_PAGES)
-    b["page_free_events"].open_perf_buffer(handle_page_free_event, page_cnt=PERF_PAGES)
+    # b["munmap_events"].open_perf_buffer(handle_munmap_event, page_cnt=PERF_PAGES)
+    # b["page_alloc_events"].open_perf_buffer(handle_page_alloc_event, page_cnt=PERF_PAGES)
+    # b["page_free_events"].open_perf_buffer(handle_page_free_event, page_cnt=PERF_PAGES)
     b["page_fault_events"].open_perf_buffer(handle_page_fault_event, page_cnt=PERF_PAGES)
     b["swap_events"].open_perf_buffer(handle_swap_event, page_cnt=PERF_PAGES)
     b["swap_writepage_events"].open_perf_buffer(handle_swap_writepage_event, page_cnt=PERF_PAGES)

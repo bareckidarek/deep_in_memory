@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"deep_in_memory/internal/data"
+	uimsg "deep_in_memory/internal/ui/msg"
 	uirender "deep_in_memory/internal/ui/render"
 )
 
@@ -39,6 +40,7 @@ type Model struct {
 	viewportVirtual  viewport.Model
 	viewportPhysical viewport.Model
 	setTargetPID     func(int) error
+	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
 }
 
 // New constructs a Model from dataset.
@@ -397,7 +399,7 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	m.viewportPhysical.Width = physicalWidth
 	m.viewportPhysical.Height = physicalHeight
 
-	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth))
+	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth, m.rangesPage))
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(pd))
 }
 
@@ -406,13 +408,15 @@ func (m *Model) clearViewports() {
 	m.viewportPhysical.SetContent("")
 }
 
-func (m *Model) renderSummary(proc data.Process, _ *data.ProcessData, virtualCount int) string {
+func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCount int) string {
 	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
+	totalPages := uirender.TotalVirtualPages(pd)
+	totalBytes := totalPages * data.PageSizeBytes
 	return fmt.Sprintf("Process: %s (%d)\nStart (UTC): %s\nVirtual pages: %d\nVirtual usage: %s\n\nPhysical Memory:\n(coming soon)\n",
 		proc.Name, proc.PID,
 		startUTC,
-		virtualCount,
-		uirender.HumanBytes(int64(virtualCount)*data.PageSizeBytes),
+		totalPages,
+		uirender.HumanBytes(int64(totalBytes)),
 	)
 }
 
@@ -424,11 +428,33 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 			if sel, ok := m.list.SelectedItem().(listItem); ok {
 				// Enter selects the focused process
 				m.selectedPID = sel.pid
+				m.rangesPage = 0 // Reset to first page when selecting new process
 				if m.setTargetPID != nil {
 					if err := m.setTargetPID(sel.pid); err != nil {
 						m.err = err
 					}
 				}
+				m.syncLayout()
+
+				// Send message to load smaps for this process
+				return m, func() tea.Msg {
+					return uimsg.LoadSmapsRequest{PID: sel.pid}
+				}
+			}
+			return m, nil
+		},
+		"n": func() (tea.Model, tea.Cmd) {
+			// Next page of virtual ranges
+			if m.selectedPID != 0 {
+				m.rangesPage++
+				m.syncLayout()
+			}
+			return m, nil
+		},
+		"p": func() (tea.Model, tea.Cmd) {
+			// Previous page of virtual ranges
+			if m.selectedPID != 0 && m.rangesPage > 0 {
+				m.rangesPage--
 				m.syncLayout()
 			}
 			return m, nil

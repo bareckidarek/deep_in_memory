@@ -2,11 +2,10 @@ package msg
 
 import "time"
 
-// ProcessFork is emitted when a child process is created.
-type ProcessFork struct {
+// ProcessExec is emitted when a process calls exec.
+type ProcessExec struct {
 	Timestamp time.Time
-	ParentPID int
-	ChildPID  int
+	PID       int
 	Comm      string
 }
 
@@ -37,6 +36,16 @@ type ProcessMunmap struct {
 	Comm      string
 }
 
+// ProcessBrk is emitted when brk syscall is called.
+type ProcessBrk struct {
+	Timestamp time.Time
+	PID       int
+	TID       int
+	Brk       uint64 // requested brk address (0 for query)
+	Ret       uint64 // returned brk address
+	Comm      string
+}
+
 // ProcessPageFault represents a page_fault_user tracepoint event.
 type ProcessPageFault struct {
 	Timestamp time.Time
@@ -46,4 +55,20 @@ type ProcessPageFault struct {
 	IP        uint64
 	ErrorCode uint64
 	Comm      string
+}
+
+// ProcessSwapUnswap represents swap-related events (do_swap_page and swap_writepage).
+type ProcessSwapUnswap struct {
+	Timestamp time.Time
+	PID       int
+	TID       int
+	Address   uint64
+	IsSwap    bool // true=SWAP (swap_writepage), false=UNSWAP (do_swap_page)
+	Comm      string
+	ErrorCode uint64
+}
+
+// LoadSmapsRequest is sent when user selects a process to load its memory maps from /proc/PID/smaps.
+type LoadSmapsRequest struct {
+	PID int
 }

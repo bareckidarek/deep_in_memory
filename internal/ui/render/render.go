@@ -11,7 +11,7 @@ import (
 	"deep_in_memory/internal/data"
 )
 
-var statusOrder = []string{"INIT", "SWAP", "UNSWAP"}
+var statusOrder = []string{"UNSWAP", "SWAP", "INIT"}
 
 const (
 	matrixColumns    = 8
@@ -30,6 +30,20 @@ func ActiveVirtualCount(vmap map[string]*data.VirtualPage) int {
 	return count
 }
 
+// TotalVirtualPages returns the total number of virtual pages across all thread ranges.
+func TotalVirtualPages(pd *data.ProcessData) uint64 {
+	var total uint64
+	if pd == nil || pd.Threads == nil {
+		return 0
+	}
+	for _, thread := range pd.Threads {
+		for _, r := range thread.Ranges {
+			total += r.Size
+		}
+	}
+	return total
+}
+
 // HumanBytes formats bytes into a human-readable string.
 func HumanBytes(b int64) string {
 	const unit = 1024
@@ -41,15 +55,20 @@ func HumanBytes(b int64) string {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+	// Use lowercase 'k' for kB, uppercase for MB, GB, TB, PB, EB
+	prefix := "kMGTPE"[exp]
+	if exp == 0 {
+		return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), prefix)
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), prefix)
 }
 
 // RenderVirtualSectionContent builds the virtual memory section text.
-func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int) string {
+func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int, page int) string {
 	return renderSection(
 		"[virtual memory]",
 		summary,
-		renderThreadRanges(pd.Threads, barWidth),
+		renderThreadRanges(pd.Threads, barWidth, page),
 		renderPhases(pd.Virtual),
 		renderMatrix("Virtual", virtualKeys(pd.Virtual)),
 	)
@@ -58,7 +77,7 @@ func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth 
 // RenderPhysicalSectionContent builds the physical memory section text.
 func RenderPhysicalSectionContent(pd *data.ProcessData) string {
 	phSummary := fmt.Sprintf("PFNs: %d\nPhysical usage: %s\n",
-		len(pd.PFNs), HumanBytes(int64(len(pd.PFNs))*data.PageSizeBytes))
+		len(pd.PFNs), HumanBytes(int64(len(pd.PFNs))*int64(data.PageSizeBytes)))
 	return renderSection(
 		"[physical memory]",
 		phSummary,
@@ -78,22 +97,106 @@ func renderSection(title string, parts ...string) string {
 	return strings.Join(compact, "\n")
 }
 
-func renderThreadRanges(threads []data.ThreadData, barWidth int) string {
+func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) string {
 	if len(threads) == 0 {
 		return "Virtual ranges: none"
 	}
 
-	var b strings.Builder
-	b.WriteString("Virtual ranges (by thread):\n")
-	for tIdx, th := range threads {
-		connector := treeConnector(tIdx, len(threads))
-		b.WriteString(fmt.Sprintf("%s %d\n", connector, th.TID))
-		prefix := branchPrefix(connector)
+	const rangesPerPage = 30
 
+	// Count total ranges across all threads
+	totalRanges := 0
+	for _, th := range threads {
+		totalRanges += len(th.Ranges)
+	}
+
+	if totalRanges == 0 {
+		return "Virtual ranges: none"
+	}
+
+	// Calculate pagination
+	startIdx := page * rangesPerPage
+	if startIdx >= totalRanges {
+		// If page is out of bounds, show last page
+		page = (totalRanges - 1) / rangesPerPage
+		startIdx = page * rangesPerPage
+	}
+	endIdx := startIdx + rangesPerPage
+	if endIdx > totalRanges {
+		endIdx = totalRanges
+	}
+
+	totalPages := (totalRanges + rangesPerPage - 1) / rangesPerPage
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Virtual ranges (by thread) - Page %d/%d (showing %d-%d of %d) [use p/n to navigate]:\n",
+		page+1, totalPages, startIdx+1, endIdx, totalRanges))
+
+	// Flatten ranges with their thread context
+	type rangeWithThread struct {
+		threadIdx int
+		threadID  int
+		rangeIdx  int
+		range_    data.AddrRange
+	}
+
+	var allRanges []rangeWithThread
+	for tIdx, th := range threads {
 		for rIdx, r := range th.Ranges {
-			rangeConn := treeConnector(rIdx, len(th.Ranges))
-			b.WriteString(fmt.Sprintf("%s%s %s\n", prefix, rangeConn, renderRangeBar(r, barWidth)))
+			allRanges = append(allRanges, rangeWithThread{
+				threadIdx: tIdx,
+				threadID:  th.TID,
+				rangeIdx:  rIdx,
+				range_:    r,
+			})
 		}
+	}
+
+	// Extract page slice
+	pageRanges := allRanges[startIdx:endIdx]
+
+	// Group by thread for rendering
+	currentThread := -1
+	for i, item := range pageRanges {
+		if item.threadID != currentThread {
+			// New thread header
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			// Determine connector based on whether this is the last thread in page
+			isLastThread := (i == len(pageRanges)-1) || (i < len(pageRanges)-1 && pageRanges[i+1].threadID != item.threadID && i+1 == len(pageRanges)-1)
+			connector := "├─"
+			if isLastThread || (endIdx >= totalRanges && i == len(pageRanges)-1) {
+				// Check if this is truly the last item
+				lastItemInThread := true
+				for j := i + 1; j < len(pageRanges); j++ {
+					if pageRanges[j].threadID == item.threadID {
+						lastItemInThread = false
+						break
+					}
+				}
+				if lastItemInThread && i == len(pageRanges)-1 {
+					connector = "└─"
+				}
+			}
+			b.WriteString(fmt.Sprintf("%s %d\n", connector, item.threadID))
+			currentThread = item.threadID
+		}
+
+		// Render range
+		prefix := "│  "
+		// Check if this is the last range in current thread on this page
+		isLastInThread := (i == len(pageRanges)-1) || (i < len(pageRanges)-1 && pageRanges[i+1].threadID != item.threadID)
+		if isLastInThread {
+			prefix = "   "
+		}
+
+		rangeConn := "├─"
+		if isLastInThread {
+			rangeConn = "└─"
+		}
+
+		b.WriteString(fmt.Sprintf("%s%s %s\n", prefix, rangeConn, renderRangeBar(item.range_, barWidth)))
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -104,28 +207,120 @@ func renderRangeBar(r data.AddrRange, barWidth int) string {
 		return fmt.Sprintf("%s [invalid range] %s", r.Start, r.End)
 	}
 
+	// Calculate expanded bar width (addresses are now inside)
+	// Estimate: ~16 chars per address + info text ~15 chars = ~40 chars
+	expandedBarWidth := barWidth + 40
+
+	// Build status segments with their widths
+	type segment struct {
+		status string
+		width  int
+	}
+	var segmentList []segment
 	totalWidthUsed := 0
-	segments := make([]string, 0, len(statusOrder)+1)
+
 	for _, status := range statusOrder {
-		pages := len(r.Statuses[status])
-		width := statusSegmentWidth(pages, r.Size, barWidth-totalWidthUsed)
+		count := 0
+		if statusCount := r.Statuses[status]; statusCount != nil {
+			count = statusCount.Count
+		}
+
+		width := statusSegmentWidth(count, r.Size, expandedBarWidth)
 		if width <= 0 {
 			continue
 		}
-		segments = append(segments, statusBlock(status, width))
+		segmentList = append(segmentList, segment{status: status, width: width})
 		totalWidthUsed += width
-		if totalWidthUsed >= barWidth {
+		if totalWidthUsed >= expandedBarWidth {
 			break
 		}
 	}
 
-	if remainder := barWidth - totalWidthUsed; remainder > 0 {
-		segments = append(segments, grayBlock(remainder))
+	// Add gray segment for remainder
+	if remainder := expandedBarWidth - totalWidthUsed; remainder > 0 {
+		segmentList = append(segmentList, segment{status: "gray", width: remainder})
 	}
 
-	bar := strings.Join(segments, "")
-	hundredVal := r.Size / 1000
-	return fmt.Sprintf("%s %s %s (100%%=%d)", r.Start, bar, r.End, hundredVal)
+	// Prepare overlay text
+	startAddr := r.Start
+	var endInfo string
+
+	// If there's a label, show it in the middle instead of addresses
+	if r.Label != "" {
+		sizeBytes := r.Size * data.PageSizeBytes
+		endInfo = fmt.Sprintf("%s (100%%=%s [%dp])", r.End, HumanBytes(int64(sizeBytes)), r.Size)
+		// Put label in the middle
+		labelText := r.Label
+		middlePos := (expandedBarWidth - len(labelText)) / 2
+		if middlePos < len(startAddr)+1 {
+			middlePos = len(startAddr) + 1
+		}
+		endPos := expandedBarWidth - len(endInfo)
+		if endPos < middlePos+len(labelText)+1 {
+			endPos = middlePos + len(labelText) + 1
+		}
+
+		overlayText := startAddr + strings.Repeat(" ", middlePos-len(startAddr)) + labelText + strings.Repeat(" ", endPos-middlePos-len(labelText)) + endInfo
+		if len(overlayText) > expandedBarWidth {
+			overlayText = overlayText[:expandedBarWidth]
+		} else if len(overlayText) < expandedBarWidth {
+			overlayText = overlayText + strings.Repeat(" ", expandedBarWidth-len(overlayText))
+		}
+
+		// Build the bar with text overlay character by character
+		var result strings.Builder
+		textPos := 0
+
+		for _, seg := range segmentList {
+			bgColor := colorForStatus(seg.status)
+			if seg.status == "gray" {
+				bgColor = "#666666"
+			}
+
+			// Render this segment with overlay text
+			for i := 0; i < seg.width && textPos < len(overlayText); i++ {
+				char := string(overlayText[textPos])
+				styled := lipgloss.NewStyle().
+					Background(lipgloss.Color(bgColor)).
+					Foreground(lipgloss.Color("#000000")).
+					Bold(true).
+					Render(char)
+				result.WriteString(styled)
+				textPos++
+			}
+		}
+		return result.String()
+	}
+
+	// Original behavior without label
+	sizeBytes := r.Size * data.PageSizeBytes
+	endInfo = fmt.Sprintf("%s (100%%=%s [%dp])", r.End, HumanBytes(int64(sizeBytes)), r.Size)
+
+	// Build the bar with text overlay character by character
+	var result strings.Builder
+	textPos := 0
+	overlayText := startAddr + strings.Repeat(" ", expandedBarWidth-len(startAddr)-len(endInfo)) + endInfo
+
+	for _, seg := range segmentList {
+		bgColor := colorForStatus(seg.status)
+		if seg.status == "gray" {
+			bgColor = "#666666"
+		}
+
+		// Render this segment with overlay text
+		for i := 0; i < seg.width && textPos < len(overlayText); i++ {
+			char := string(overlayText[textPos])
+			styled := lipgloss.NewStyle().
+				Background(lipgloss.Color(bgColor)).
+				Foreground(lipgloss.Color("#000000")).
+				Bold(true).
+				Render(char)
+			result.WriteString(styled)
+			textPos++
+		}
+	}
+
+	return result.String()
 }
 
 func colorForStatus(status string) string {
@@ -141,11 +336,11 @@ func colorForStatus(status string) string {
 	}
 }
 
-func statusSegmentWidth(pages int, rangeSize uint64, availableWidth int) int {
-	if pages <= 0 || rangeSize == 0 || availableWidth <= 0 {
+func statusSegmentWidth(count int, rangeSize uint64, availableWidth int) int {
+	if count <= 0 || rangeSize == 0 || availableWidth <= 0 {
 		return 0
 	}
-	portion := float64(pages*data.PageSizeBytes) / float64(rangeSize)
+	portion := float64(count) / float64(rangeSize)
 	width := int(math.Round(portion * float64(availableWidth)))
 	if width == 0 {
 		width = 1

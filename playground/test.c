@@ -5,15 +5,22 @@
 #include <string.h>
 #include <malloc.h>
 
+#define ALLOC_SIZE 1024 * 100 //brk
+
+
+//#define ALLOC_SIZE 1024 * 1024 * 2 //mmap
+
 int main(void) {
     //malloc_info(0, stdout);
     
     void *a;
-    int counter = 1;
+    int counter = 0;
+    //char c;
+    //read(0, &c, 1);
     while (1) {
-        //char c;
-        //read(0, &c, 1);
-        
+        char c;
+        read(0, &c, 1);
+
         //int liczba = rand() % 100 + 1;
         void *b;
         // if(liczba % 2 == 0) {
@@ -24,17 +31,19 @@ int main(void) {
 
         //b = malloc(sizeof(bool));
         //b = malloc(1024  * 10);
-        b = malloc(1024 * 1024);
+        b = malloc(ALLOC_SIZE);
 
         if (!b) {
             perror("malloc");
             return 1;
         }
 
-        //read(0, &c, 1);
-        sleep(2);
+        read(0, &c, 1);
+        //sleep(2);
 
-        for(int i = 0; i < 1024 * 1024; i++) {
+        for(int i = 0; i < ALLOC_SIZE; i++) {
+            //usleep(1 * 10);
+            //memset(&((char *)b)[i], 'a', 64);
             ((char *)b)[i] = 'a';
         }
         //strcpy(b, "ala ma kota");
@@ -43,12 +52,18 @@ int main(void) {
             a = b;
         }
 
-        // if(counter == 4) {
-        //     printf("First allocated block content: %.12s\n", (char *)a);
-        //     for(int i = 0; i < 1024 * 512; i++) {
-        //         printf("%c", ((char *)a)[i]);
-        //     }
-        // }
+        read(0, &c, 1);
+
+        if(counter == 0) {
+            printf("First allocated block content: %.12s\n", (char *)a);
+            for(int i = 0; i < ALLOC_SIZE; i++) {
+                //usleep(1 * 10);
+                char d = ((char *)a)[i];
+                if (d != 'a') {
+                    break;
+                }
+            }
+        }
 
         // if (counter % 10 == 0)
         // {

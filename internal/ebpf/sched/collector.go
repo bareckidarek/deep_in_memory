@@ -28,15 +28,15 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 		return nil, nil, nil, fmt.Errorf("load BPF objects: %w", err)
 	}
 
-	forkLink, err := link.Tracepoint("sched", "sched_process_fork", objs.HandleFork, nil)
+	execLink, err := link.Tracepoint("sched", "sched_process_exec", objs.HandleExec, nil)
 	if err != nil {
 		objs.Close()
-		return nil, nil, nil, fmt.Errorf("attach fork: %w", err)
+		return nil, nil, nil, fmt.Errorf("attach exec: %w", err)
 	}
 
 	exitLink, err := link.Tracepoint("sched", "sched_process_exit", objs.HandleExit, nil)
 	if err != nil {
-		forkLink.Close()
+		execLink.Close()
 		objs.Close()
 		return nil, nil, nil, fmt.Errorf("attach exit: %w", err)
 	}
@@ -44,7 +44,7 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 	reader, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
 		exitLink.Close()
-		forkLink.Close()
+		execLink.Close()
 		objs.Close()
 		return nil, nil, nil, fmt.Errorf("create ringbuf reader: %w", err)
 	}
@@ -85,7 +85,7 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 			ts := time.Unix(0, int64(e.Ts))
 			switch e.Type {
 			case 1:
-				send(uimsg.ProcessFork{Timestamp: ts, ParentPID: int(e.Pid), ChildPID: int(e.ChildPid), Comm: cString(e.Comm[:])})
+				send(uimsg.ProcessExec{Timestamp: ts, PID: int(e.Pid), Comm: cString(e.Comm[:])})
 			case 2:
 				send(uimsg.ProcessExit{Timestamp: ts, PID: int(e.Pid), Comm: cString(e.Comm[:])})
 			}
@@ -95,7 +95,7 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 	cleanup := func() error {
 		reader.Close()
 		exitLink.Close()
-		forkLink.Close()
+		execLink.Close()
 		return objs.Close()
 	}
 
