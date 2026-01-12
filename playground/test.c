@@ -5,10 +5,10 @@
 #include <string.h>
 #include <malloc.h>
 
-#define ALLOC_SIZE 1024 * 100 //brk
+//#define ALLOC_SIZE 1024 * 100 //brk
 
 
-//#define ALLOC_SIZE 1024 * 1024 * 2 //mmap
+#define ALLOC_SIZE 1024 * 1024 //mmap
 
 int main(void) {
     //malloc_info(0, stdout);

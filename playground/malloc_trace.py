@@ -856,9 +856,9 @@ def main():
             f"{ranges_info}"
         )
 
-    b["malloc_events"].open_perf_buffer(handle_malloc_event, page_cnt=PERF_PAGES)
+    #b["malloc_events"].open_perf_buffer(handle_malloc_event, page_cnt=PERF_PAGES)
     # b["free_events"].open_perf_buffer(handle_free_event, page_cnt=PERF_PAGES)
-    b["brk_events"].open_perf_buffer(handle_brk_event, page_cnt=PERF_PAGES)
+    #b["brk_events"].open_perf_buffer(handle_brk_event, page_cnt=PERF_PAGES)
     b["mmap_events"].open_perf_buffer(handle_mmap_event, page_cnt=PERF_PAGES)
     # b["munmap_events"].open_perf_buffer(handle_munmap_event, page_cnt=PERF_PAGES)
     # b["page_alloc_events"].open_perf_buffer(handle_page_alloc_event, page_cnt=PERF_PAGES)

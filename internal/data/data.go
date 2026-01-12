@@ -97,6 +97,53 @@ type AddrRange struct {
 	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
 }
 
+// SortRanges sorts address ranges according to display rules:
+// 1. [heap] at top
+// 2. Ranges with empty Label, sorted by StartVal
+// 3. Ranges with non-empty Label (no file/lib references), sorted by StartVal
+// 4. Ranges with file/lib references, sorted by StartVal
+func SortRanges(ranges []AddrRange) {
+	sort.SliceStable(ranges, func(i, j int) bool {
+		// Helper to check if label contains file/lib reference
+		isFileRef := func(label string) bool {
+			return strings.HasPrefix(label, "/") || strings.Contains(label, ".so")
+		}
+
+		// Rule 1: [heap] always first
+		if ranges[i].Label == "[heap]" {
+			return true
+		}
+		if ranges[j].Label == "[heap]" {
+			return false
+		}
+
+		// Categorize ranges
+		// Category 0: empty label
+		// Category 1: non-empty label, no file/lib
+		// Category 2: file/lib reference
+		getCategory := func(r AddrRange) int {
+			if r.Label == "" {
+				return 0
+			}
+			if isFileRef(r.Label) {
+				return 2
+			}
+			return 1
+		}
+
+		catI := getCategory(ranges[i])
+		catJ := getCategory(ranges[j])
+
+		// Sort by category first
+		if catI != catJ {
+			return catI < catJ
+		}
+
+		// Within same category, sort by StartVal
+		return ranges[i].StartVal < ranges[j].StartVal
+	})
+}
+
 // Dataset is the top-level data container.
 type Dataset struct {
 	Processes map[int]*ProcessData
@@ -140,6 +187,8 @@ func (pd *ProcessData) AddMmapRange(tid int, addr, length uint64) {
 	}
 
 	pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
+	// Sort ranges after adding new one
+	SortRanges(pd.Threads[threadIdx].Ranges)
 }
 
 // ExtendBrkRange extends the heap range for a thread based on brk syscall.
@@ -191,6 +240,8 @@ func (pd *ProcessData) ExtendBrkRange(tid int, brk, ret uint64) {
 				Label:    "[heap]",
 			}
 			pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
+			// Sort ranges after adding heap
+			SortRanges(pd.Threads[threadIdx].Ranges)
 		}
 		return
 	}

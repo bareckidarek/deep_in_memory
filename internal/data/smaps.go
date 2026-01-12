@@ -65,13 +65,15 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 						// anon_inode:bpf-map
 						label = remainder
 					} else if strings.HasPrefix(remainder, "/") {
-						// File path - skip this range
-						continue
+						// File path - TEMPORARILY show all ranges
+						label = remainder
+						// continue
 					} else {
 						// Check if it's just a number (inode)
 						if _, err := strconv.ParseUint(remainder, 10, 64); err != nil {
-							// Not a number - likely a file path without /, skip
-							continue
+							// Not a number - likely a file path without /, TEMPORARILY show all
+							label = remainder
+							// continue
 						}
 						label = ""
 					}
@@ -144,6 +146,9 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 	if len(ranges) == 0 {
 		return nil, nil
 	}
+
+	// Sort ranges before returning
+	SortRanges(ranges)
 
 	// Return all ranges under a single ThreadData with TID=PID
 	return []ThreadData{

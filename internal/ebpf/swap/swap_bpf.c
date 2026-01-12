@@ -60,10 +60,10 @@ int kprobe_do_swap_page(struct pt_regs *ctx) {
     __u32 key = 0;
     __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
     if (!target || *target == 0) {
-        return 0;
+        return 0; // No target set, skip
     }
     if (pid != *target) {
-        return 0;
+        return 0; // Not the target PID
     }
 
     struct swap_event evt = {};
@@ -94,10 +94,10 @@ int kretprobe_do_swap_page(struct pt_regs *ctx) {
     __u32 key = 0;
     __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
     if (!target || *target == 0) {
-        return 0;
+        return 0; // No target set, skip
     }
     if (pid != *target) {
-        return 0;
+        return 0; // Not the target PID
     }
 
     struct swap_event *evt = bpf_map_lookup_elem(&swap_entries, &pid_tgid);
@@ -124,10 +124,10 @@ int kprobe_swap_writepage(struct pt_regs *ctx) {
     __u32 key = 0;
     __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
     if (!target || *target == 0) {
-        return 0;
+        return 0; // No target set, skip
     }
     if (pid != *target) {
-        return 0;
+        return 0; // Not the target PID
     }
 
     struct swap_event evt = {};
@@ -158,10 +158,10 @@ int kretprobe_swap_writepage(struct pt_regs *ctx) {
     __u32 key = 0;
     __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
     if (!target || *target == 0) {
-        return 0;
+        return 0; // No target set, skip
     }
     if (pid != *target) {
-        return 0;
+        return 0; // Not the target PID
     }
 
     struct swap_event *evt = bpf_map_lookup_elem(&swap_writepage_entries, &pid_tgid);

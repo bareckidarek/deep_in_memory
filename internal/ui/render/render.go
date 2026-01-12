@@ -11,7 +11,7 @@ import (
 	"deep_in_memory/internal/data"
 )
 
-var statusOrder = []string{"UNSWAP", "SWAP", "INIT"}
+var statusOrder = []string{"SWAP", "UNSWAP", "INIT"}
 
 const (
 	matrixColumns    = 8
@@ -44,6 +44,44 @@ func TotalVirtualPages(pd *data.ProcessData) uint64 {
 	return total
 }
 
+// StatusStats holds page counts for each status category.
+type StatusStats struct {
+	Reservation uint64 // Total reserved virtual address space (sum of all range sizes)
+	Allocation  uint64 // INIT pages (physically allocated)
+	PageOut     uint64 // SWAP pages (swapped out)
+	PageIn      uint64 // UNSWAP pages (swapped in)
+}
+
+// CalculateStatusStats calculates page counts for each status category.
+func CalculateStatusStats(pd *data.ProcessData) StatusStats {
+	var stats StatusStats
+	if pd == nil || pd.Threads == nil {
+		return stats
+	}
+
+	for _, thread := range pd.Threads {
+		for _, r := range thread.Ranges {
+			// Reservation = total virtual address space (sum of all range sizes)
+			stats.Reservation += r.Size
+
+			// Count each status
+			if r.Statuses != nil {
+				if initCount := r.Statuses["INIT"]; initCount != nil {
+					stats.Allocation += uint64(initCount.Count)
+				}
+				if swapCount := r.Statuses["SWAP"]; swapCount != nil {
+					stats.PageOut += uint64(swapCount.Count)
+				}
+				if unswapCount := r.Statuses["UNSWAP"]; unswapCount != nil {
+					stats.PageIn += uint64(unswapCount.Count)
+				}
+			}
+		}
+	}
+
+	return stats
+}
+
 // HumanBytes formats bytes into a human-readable string.
 func HumanBytes(b int64) string {
 	const unit = 1024
@@ -64,13 +102,14 @@ func HumanBytes(b int64) string {
 }
 
 // RenderVirtualSectionContent builds the virtual memory section text.
-func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int, page int) string {
-	return renderSection(
+func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int, page int, viewportWidth int) string {
+	legend := buildColorLegend()
+	return renderSectionWithLegend(
 		"[virtual memory]",
+		legend,
+		viewportWidth,
 		summary,
 		renderThreadRanges(pd.Threads, barWidth, page),
-		renderPhases(pd.Virtual),
-		renderMatrix("Virtual", virtualKeys(pd.Virtual)),
 	)
 }
 
@@ -97,12 +136,43 @@ func renderSection(title string, parts ...string) string {
 	return strings.Join(compact, "\n")
 }
 
+func renderSectionWithLegend(title string, legend string, viewportWidth int, parts ...string) string {
+	compact := make([]string, 0, len(parts)+1)
+	// Create title line with legend on the right
+	// Calculate plain text length (lipgloss styles add ANSI codes that don't count for visual width)
+	legendPlainLen := 59 // "██ reservation  ██ allocation  ██ page-out  ██ page-in" = 59 chars visible
+	titleLen := len(title)
+	spacing := viewportWidth - titleLen - legendPlainLen
+	if spacing < 2 {
+		spacing = 2
+	}
+	titleLine := title + strings.Repeat(" ", spacing) + legend
+	compact = append(compact, titleLine)
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		compact = append(compact, part)
+	}
+	return strings.Join(compact, "\n")
+}
+
+func buildColorLegend() string {
+	// Build colored legend with 2-character width boxes
+	grayBox := lipgloss.NewStyle().Background(lipgloss.Color("#666666")).Render("  ")
+	initBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("INIT"))).Render("  ")
+	swapBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("SWAP"))).Render("  ")
+	unswapBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("UNSWAP"))).Render("  ")
+
+	return fmt.Sprintf("%s reservation  %s allocation  %s page-out  %s page-in", grayBox, initBox, swapBox, unswapBox)
+}
+
 func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) string {
 	if len(threads) == 0 {
 		return "Virtual ranges: none"
 	}
 
-	const rangesPerPage = 30
+	const rangesPerPage = 25
 
 	// Count total ranges across all threads
 	totalRanges := 0
@@ -163,33 +233,46 @@ func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) strin
 			if i > 0 {
 				b.WriteString("\n")
 			}
-			// Determine connector based on whether this is the last thread in page
-			isLastThread := (i == len(pageRanges)-1) || (i < len(pageRanges)-1 && pageRanges[i+1].threadID != item.threadID && i+1 == len(pageRanges)-1)
-			connector := "├─"
-			if isLastThread || (endIdx >= totalRanges && i == len(pageRanges)-1) {
-				// Check if this is truly the last item
-				lastItemInThread := true
-				for j := i + 1; j < len(pageRanges); j++ {
-					if pageRanges[j].threadID == item.threadID {
-						lastItemInThread = false
-						break
-					}
-				}
-				if lastItemInThread && i == len(pageRanges)-1 {
-					connector = "└─"
+
+			// Determine if this is the last thread: check if it's the last range overall or last on page
+			isLastThreadOverall := endIdx >= totalRanges && i == len(pageRanges)-1
+
+			// Check if there are more threads after this one in the page
+			hasMoreThreadsInPage := false
+			for j := i + 1; j < len(pageRanges); j++ {
+				if pageRanges[j].threadID != item.threadID {
+					hasMoreThreadsInPage = true
+					break
 				}
 			}
+
+			connector := "├─"
+			if isLastThreadOverall || (!hasMoreThreadsInPage && endIdx >= totalRanges) {
+				connector = "└─"
+			}
+
 			b.WriteString(fmt.Sprintf("%s %d\n", connector, item.threadID))
 			currentThread = item.threadID
 		}
 
 		// Render range
+		// Determine prefix based on whether thread connector was └─ or ├─
+		isLastThreadOverall := endIdx >= totalRanges && currentThread == item.threadID
+		hasMoreThreadsAfter := false
+		for j := i + 1; j < len(pageRanges); j++ {
+			if pageRanges[j].threadID != currentThread {
+				hasMoreThreadsAfter = true
+				break
+			}
+		}
+
 		prefix := "│  "
-		// Check if this is the last range in current thread on this page
-		isLastInThread := (i == len(pageRanges)-1) || (i < len(pageRanges)-1 && pageRanges[i+1].threadID != item.threadID)
-		if isLastInThread {
+		if (isLastThreadOverall && !hasMoreThreadsAfter) || (endIdx >= totalRanges && !hasMoreThreadsAfter) {
 			prefix = "   "
 		}
+
+		// Check if this is the last range in current thread on this page
+		isLastInThread := (i == len(pageRanges)-1) || (i < len(pageRanges)-1 && pageRanges[i+1].threadID != item.threadID)
 
 		rangeConn := "├─"
 		if isLastInThread {

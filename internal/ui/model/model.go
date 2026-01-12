@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -184,7 +185,8 @@ func (m *Model) layoutMetrics() (available, rowHeight, secondRowHeight, barWidth
 	if contentHeight < minContentHeight {
 		contentHeight = minContentHeight
 	}
-	rowHeight = contentHeight / 2
+	// Virtual memory gets 55%, physical memory gets 45%
+	rowHeight = (contentHeight * 55) / 100
 	if rowHeight < minContentHeight {
 		rowHeight = minContentHeight
 	}
@@ -399,7 +401,7 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	m.viewportPhysical.Width = physicalWidth
 	m.viewportPhysical.Height = physicalHeight
 
-	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth, m.rangesPage))
+	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth, m.rangesPage, virtualWidth))
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(pd))
 }
 
@@ -410,14 +412,74 @@ func (m *Model) clearViewports() {
 
 func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCount int) string {
 	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
-	totalPages := uirender.TotalVirtualPages(pd)
-	totalBytes := totalPages * data.PageSizeBytes
-	return fmt.Sprintf("Process: %s (%d)\nStart (UTC): %s\nVirtual pages: %d\nVirtual usage: %s\n\nPhysical Memory:\n(coming soon)\n",
-		proc.Name, proc.PID,
-		startUTC,
-		totalPages,
-		uirender.HumanBytes(int64(totalBytes)),
+	stats := uirender.CalculateStatusStats(pd)
+
+	// Build header
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Process: %s (%d)\n", proc.Name, proc.PID))
+	sb.WriteString(fmt.Sprintf("Start (UTC): %s\n\n", startUTC))
+
+	// Define colors for each column
+	grayColor := "#666666"  // reservation
+	greenColor := "#00af5f" // allocation (INIT)
+	redColor := "#ff5f5f"   // page-out (SWAP)
+	blueColor := "#5f87ff"  // page-in (UNSWAP)
+
+	// Define column widths
+	labelWidth := 8
+	col1Width := 36
+	col2Width := 30
+	col3Width := 24
+	col4Width := 24
+
+	// Create styles
+	borderStyle := lipgloss.NewStyle().Border(lipgloss.NormalBorder())
+	labelStyle := lipgloss.NewStyle().Width(labelWidth)
+	col1Style := lipgloss.NewStyle().Width(col1Width).Foreground(lipgloss.Color(grayColor))
+	col2Style := lipgloss.NewStyle().Width(col2Width).Foreground(lipgloss.Color(greenColor))
+	col3Style := lipgloss.NewStyle().Width(col3Width).Foreground(lipgloss.Color(redColor))
+	col4Style := lipgloss.NewStyle().Width(col4Width).Foreground(lipgloss.Color(blueColor))
+
+	// Build table rows
+	headerRow := lipgloss.JoinHorizontal(lipgloss.Top,
+		labelStyle.Render(""),
+		col1Style.Render("virtual address space reservation"),
+		col2Style.Render("physical page allocation"),
+		col3Style.Render("swap-out / page-out"),
+		col4Style.Render("swap-in / page-in"),
 	)
+
+	pagesRow := lipgloss.JoinHorizontal(lipgloss.Top,
+		labelStyle.Render("pages"),
+		col1Style.Render(fmt.Sprintf("%d", stats.Reservation)),
+		col2Style.Render(fmt.Sprintf("%d", stats.Allocation)),
+		col3Style.Render(fmt.Sprintf("%d", stats.PageOut)),
+		col4Style.Render(fmt.Sprintf("%d", stats.PageIn)),
+	)
+
+	reservationBytes := stats.Reservation * data.PageSizeBytes
+	allocationBytes := stats.Allocation * data.PageSizeBytes
+	pageOutBytes := stats.PageOut * data.PageSizeBytes
+	pageInBytes := stats.PageIn * data.PageSizeBytes
+
+	sizeRow := lipgloss.JoinHorizontal(lipgloss.Top,
+		labelStyle.Render("size"),
+		col1Style.Render(uirender.HumanBytes(int64(reservationBytes))),
+		col2Style.Render(uirender.HumanBytes(int64(allocationBytes))),
+		col3Style.Render(uirender.HumanBytes(int64(pageOutBytes))),
+		col4Style.Render(uirender.HumanBytes(int64(pageInBytes))),
+	)
+
+	// Join all rows vertically
+	table := lipgloss.JoinVertical(lipgloss.Left, headerRow, pagesRow, sizeRow)
+
+	// Apply border to the entire table
+	borderedTable := borderStyle.Render(table)
+
+	sb.WriteString(borderedTable)
+	sb.WriteString("\n")
+
+	return sb.String()
 }
 
 func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
