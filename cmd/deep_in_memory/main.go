@@ -95,8 +95,8 @@ func clearDatabase(store storedb.Db[data.ProcessData]) error {
 	for _, proc := range allProcs {
 		key := fmt.Sprintf("%d", proc.Proc.PID)
 		if err := store.Delete(key); err != nil {
-			// Continue even if delete fails
-			log.Printf("failed to delete process %d: %v", proc.Proc.PID, err)
+			// Continue even if delete fails - silently ignore
+			_ = err
 		}
 	}
 	return nil

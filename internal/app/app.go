@@ -1,7 +1,6 @@
 package app
 
 import (
-	"log"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,44 +46,28 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case uimsg.ProcessExec:
-		if err := m.dbHelper.HandleProcessExec(v); err != nil {
-			log.Printf("Failed to handle exec event for PID %d: %v", v.PID, err)
-		}
+		m.dbHelper.HandleProcessExec(v)
 		return m, nil
 	case uimsg.ProcessExit:
-		if err := m.dbHelper.HandleProcessExit(v); err != nil {
-			log.Printf("Failed to handle exit event for PID %d: %v", v.PID, err)
-		}
+		m.dbHelper.HandleProcessExit(v)
 		return m, nil
 	case uimsg.ProcessMmap:
-		if err := m.dbHelper.HandleMmapEvent(v); err != nil {
-			log.Printf("Failed to handle mmap event for PID %d: %v", v.PID, err)
-		}
+		m.dbHelper.HandleMmapEvent(v)
 		return m, nil
 	case uimsg.ProcessMunmap:
-		if err := m.dbHelper.HandleMunmapEvent(v); err != nil {
-			log.Printf("Failed to handle munmap event for PID %d: %v", v.PID, err)
-		}
+		m.dbHelper.HandleMunmapEvent(v)
 		return m, nil
 	case uimsg.ProcessBrk:
-		if err := m.dbHelper.HandleBrkEvent(v); err != nil {
-			log.Printf("Failed to handle brk event for PID %d: %v", v.PID, err)
-		}
+		m.dbHelper.HandleBrkEvent(v)
 		return m, nil
 	case uimsg.ProcessPageFault:
-		if err := m.dbHelper.HandlePageFaultEvent(v); err != nil {
-			log.Printf("Failed to handle page fault for PID %d: %v", v.PID, err)
-		}
+		m.dbHelper.HandlePageFaultEvent(v)
 		return m, nil
 	case uimsg.ProcessSwapUnswap:
-		if err := m.dbHelper.HandleSwapEvent(v); err != nil {
-			log.Printf("Failed to handle swap event for PID %d: %v", v.PID, err)
-		}
+		m.dbHelper.HandleSwapEvent(v)
 		return m, nil
 	case uimsg.LoadSmapsRequest:
-		if err := m.dbHelper.LoadSmapsForProcess(v.PID); err != nil {
-			log.Printf("Failed to load smaps for PID %d: %v", v.PID, err)
-		}
+		m.dbHelper.LoadSmapsForProcess(v.PID)
 		return m, nil
 	case refreshMsg:
 		m.reload()
@@ -106,8 +89,7 @@ func (m *Model) View() string {
 func (m *Model) reload() {
 	procs, err := m.db.All()
 	if err != nil {
-		log.Printf("Failed to reload processes from database: %v", err)
-		// Don't crash the UI, just log the error and continue with empty dataset
+		// Don't crash the UI, just continue with empty dataset
 		m.ui.SetDataset(data.Dataset{Processes: make(map[int]*data.ProcessData), Order: []int{}})
 		return
 	}

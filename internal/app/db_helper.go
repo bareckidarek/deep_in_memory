@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/timshannon/bolthold"
@@ -119,8 +118,7 @@ func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
 	}
 
 	if len(records) == 0 {
-		// Process not found, nothing to unmap
-		log.Printf("Process %d not found for munmap, ignoring", ev.PID)
+		// Process not found, nothing to unmap - silently ignore
 		return nil
 	}
 
@@ -135,13 +133,14 @@ func (h *DBHelper) HandlePageFaultEvent(ev uimsg.ProcessPageFault) error {
 	if ev.ErrorCode != 0x6 {
 		return nil
 	}
+
 	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
 	if err != nil {
 		return fmt.Errorf("failed to query process for page fault %d: %w", ev.PID, err)
 	}
 
 	if len(records) == 0 {
-		log.Printf("Process %d not found for page fault, ignoring", ev.PID)
+		// Process not found for page fault - silently ignore
 		return nil
 	}
 
@@ -156,13 +155,14 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 	if ev.ErrorCode != 0 {
 		return nil
 	}
+
 	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
 	if err != nil {
 		return fmt.Errorf("failed to query process for swap %d: %w", ev.PID, err)
 	}
 
 	if len(records) == 0 {
-		log.Printf("Process %d not found for swap event, ignoring", ev.PID)
+		// Process not found for swap event - silently ignore
 		return nil
 	}
 
@@ -175,16 +175,17 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 func (h *DBHelper) LoadSmapsForProcess(pid int) error {
 	threads, err := data.LoadSmapsRanges(pid)
 	if err != nil {
-		log.Printf("Failed to load smaps for PID %d: %v", pid, err)
-		return nil // Don't fail the operation, just skip smaps loading
+		// Failed to load smaps - silently skip
+		return nil
 	}
+
 	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(pid))
 	if err != nil {
 		return fmt.Errorf("failed to query process for smaps %d: %w", pid, err)
 	}
 
 	if len(records) == 0 {
-		log.Printf("Process %d not found for smaps loading", pid)
+		// Process not found for smaps loading - silently skip
 		return nil
 	}
 
