@@ -25,9 +25,18 @@ def main():
                 print("Nie udało się odczytać wpisu z pagemap.")
                 sys.exit(1)
             value = struct.unpack("Q", entry)[0]
-            present = (value >> 63) & 1
-            pfn = value & ((1 << 55) - 1)
-            print(f"present={present}, pfn={hex(pfn)}")
+            flags = {
+                "present":      bool((value >> 63) & 1),
+                "swapped":      bool((value >> 62) & 1),
+                "file_page":    bool((value >> 61) & 1),
+                "exclusive":    bool((value >> 56) & 1),
+                "soft_dirty":   bool((value >> 55) & 1),
+                "pfn":          hex(value & ((1 << 55) - 1)) if ((value >> 63) & 1) else None,
+                "swap_type":    (value >> 0) & 0x1f if ((value >> 62) & 1) else None,
+                "swap_offset":  (value >> 5) & 0x7ffffffff if ((value >> 62) & 1) else None
+            }
+            for k, v in flags.items():
+                print(f"{k}: {v}")
     except Exception as e:
         print(f"Błąd: {e}")
         sys.exit(1)

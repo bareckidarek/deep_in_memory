@@ -11,11 +11,11 @@ import (
     "go.etcd.io/bbolt"
     // Zaimportuj swój pakiet z ProcessData, np.:
     // "github.com/twoj_user/twoj_repo/internal/data"
-    "yourmodule/internal/data"
+    "deep_in_memory/internal/data"
 )
 
 func main() {
-    db, err := bbolt.Open("deep_in_memory.db", 0600, nil)
+    db, err := bbolt.Open("../../deep_in_memory.db", 0600, nil)
     if err != nil {
         log.Fatal(err)
     }
