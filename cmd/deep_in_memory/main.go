@@ -47,7 +47,8 @@ func main() {
 	p := tea.NewProgram(appModel, tea.WithAltScreen(), tea.WithMouseAllMotion())
 
 	// Start sched collector and get the shared state
-	schedCleanup, sharedStateInterface, err := sched.Start(ctx, p.Send)
+	var sharedState *ebpfshared.SharedState
+	schedCleanup, stateInterface, err := sched.Start(ctx, p.Send)
 	if err != nil {
 		// Send error to UI and continue without eBPF functionality
 		p.Send(uimsg.ApplicationError{
@@ -57,12 +58,10 @@ func main() {
 		// Continue without sched collector - application will still work for process listing
 	} else {
 		defer schedCleanup()
-	}
-
-	// Convert to SharedState if available (eBPF enabled)
-	var sharedState *ebpfshared.SharedState
-	if s, ok := sharedStateInterface.(*ebpfshared.SharedState); ok {
-		sharedState = s
+		// Convert interface{} to SharedState for eBPF mode
+		if s, ok := stateInterface.(*ebpfshared.SharedState); ok {
+			sharedState = s
+		}
 	}
 
 	// Start mmap collector with shared state

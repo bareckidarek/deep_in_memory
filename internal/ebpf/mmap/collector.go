@@ -16,13 +16,14 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 
 	"deep_in_memory/internal/constants"
+	ebpfshared "deep_in_memory/internal/ebpf"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
 // Start attaches mmap/munmap tracepoints and streams events to the provided send function.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // Requires the SharedState from the sched module to filter events.
-func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpf.SharedState) (func() error, error) {
+func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpfshared.SharedState) (func() error, error) {
 	var objs MmapProgObjects
 	spec, err := LoadMmapProg()
 	if err != nil {

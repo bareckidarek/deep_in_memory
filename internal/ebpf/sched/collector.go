@@ -11,35 +11,34 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
 	"deep_in_memory/internal/constants"
-	"deep_in_memory/internal/ebpf"
+	ebpfshared "deep_in_memory/internal/ebpf"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
 // Start attaches sched tracepoints and streams events to the provided send function.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // Returns a SharedState for thread-safe access to target PID and cleanup function.
-func Start(ctx context.Context, send func(tea.Msg)) (func() error, *ebpf.SharedState, error) {
+func Start(ctx context.Context, send func(tea.Msg)) (func() error, interface{}, error) {
 	var objs SchedProgObjects
 	if err := LoadSchedProgObjects(&objs, nil); err != nil {
-		return nil, nil, nil, fmt.Errorf("load BPF objects: %w", err)
+		return nil, nil, fmt.Errorf("load BPF objects: %w", err)
 	}
 
 	execLink, err := link.Tracepoint("sched", "sched_process_exec", objs.HandleExec, nil)
 	if err != nil {
 		objs.Close()
-		return nil, nil, nil, fmt.Errorf("attach exec: %w", err)
+		return nil, nil, fmt.Errorf("attach exec: %w", err)
 	}
 
 	exitLink, err := link.Tracepoint("sched", "sched_process_exit", objs.HandleExit, nil)
 	if err != nil {
 		execLink.Close()
 		objs.Close()
-		return nil, nil, nil, fmt.Errorf("attach exit: %w", err)
+		return nil, nil, fmt.Errorf("attach exit: %w", err)
 	}
 
 	reader, err := ringbuf.NewReader(objs.Events)
@@ -47,11 +46,11 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, *ebpf.SharedS
 		exitLink.Close()
 		execLink.Close()
 		objs.Close()
-		return nil, nil, nil, fmt.Errorf("create ringbuf reader: %w", err)
+		return nil, nil, fmt.Errorf("create ringbuf reader: %w", err)
 	}
 
 	// Create shared state for thread-safe access
-	sharedState := ebpf.NewSharedState(objs.TargetPid)
+	sharedState := ebpfshared.NewSharedState(objs.TargetPid)
 
 	go func() {
 		defer reader.Close()
