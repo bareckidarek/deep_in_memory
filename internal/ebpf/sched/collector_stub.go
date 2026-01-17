@@ -7,10 +7,9 @@ import (
 	"errors"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/cilium/ebpf"
 )
 
 // Start is a stub when eBPF build tag is not enabled or eBPF assets are missing.
-func Start(_ context.Context, _ func(tea.Msg)) (func() error, func(int) error, *ebpf.Map, error) {
-	return func() error { return nil }, func(int) error { return nil }, nil, errors.New("eBPF support not built; run go generate ./internal/ebpf/sched and build with -tags ebpf")
+func Start(_ context.Context, _ func(tea.Msg)) (func() error, interface{}, error) {
+	return func() error { return nil }, nil, errors.New("eBPF support not built; run go generate ./internal/ebpf/sched and build with -tags ebpf")
 }

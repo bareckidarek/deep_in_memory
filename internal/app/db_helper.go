@@ -6,6 +6,7 @@ import (
 
 	"github.com/timshannon/bolthold"
 
+	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
 	storedb "deep_in_memory/internal/thirdparty/db"
 	uimsg "deep_in_memory/internal/ui/msg"
@@ -13,12 +14,28 @@ import (
 
 // DBHelper provides consistent database operations with error handling
 type DBHelper struct {
-	db storedb.Db[data.ProcessData]
+	db            storedb.Db[data.ProcessData]
+	errorCallback func(error) // Callback to report non-critical errors to UI
 }
 
 // NewDBHelper creates a new database helper
-func NewDBHelper(db storedb.Db[data.ProcessData]) *DBHelper {
-	return &DBHelper{db: db}
+func NewDBHelper(db storedb.Db[data.ProcessData], errorCallback func(error)) *DBHelper {
+	return &DBHelper{
+		db:            db,
+		errorCallback: errorCallback,
+	}
+}
+
+// SetErrorCallback sets the callback function for reporting non-critical errors
+func (h *DBHelper) SetErrorCallback(callback func(error)) {
+	h.errorCallback = callback
+}
+
+// reportError sends a non-critical error to the UI if callback is set
+func (h *DBHelper) reportError(err error) {
+	if h.errorCallback != nil {
+		h.errorCallback(err)
+	}
 }
 
 // GetOrCreateProcess retrieves a process or creates a new one if it doesn't exist
@@ -118,7 +135,8 @@ func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
 	}
 
 	if len(records) == 0 {
-		// Process not found, nothing to unmap - silently ignore
+		// Process not found, nothing to unmap - report but don't fail
+		h.reportError(fmt.Errorf("munmap event for unknown process PID %d (process may have exited)", ev.PID))
 		return nil
 	}
 
@@ -130,7 +148,7 @@ func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
 // HandlePageFaultEvent handles page fault events for a process
 func (h *DBHelper) HandlePageFaultEvent(ev uimsg.ProcessPageFault) error {
 	// Filter page faults by error code (only handle user write faults)
-	if ev.ErrorCode != 0x6 {
+	if ev.ErrorCode != constants.PageFaultErrorCode {
 		return nil
 	}
 
@@ -140,7 +158,8 @@ func (h *DBHelper) HandlePageFaultEvent(ev uimsg.ProcessPageFault) error {
 	}
 
 	if len(records) == 0 {
-		// Process not found for page fault - silently ignore
+		// Process not found for page fault - report but don't fail
+		h.reportError(fmt.Errorf("page fault event for unknown process PID %d (process may have exited)", ev.PID))
 		return nil
 	}
 
@@ -152,7 +171,7 @@ func (h *DBHelper) HandlePageFaultEvent(ev uimsg.ProcessPageFault) error {
 // HandleSwapEvent handles swap events for a process
 func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 	// Filter swap events by error code
-	if ev.ErrorCode != 0 {
+	if ev.ErrorCode != constants.SwapEventSuccessCode {
 		return nil
 	}
 
@@ -162,7 +181,8 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 	}
 
 	if len(records) == 0 {
-		// Process not found for swap event - silently ignore
+		// Process not found for swap event - report but don't fail
+		h.reportError(fmt.Errorf("swap event for unknown process PID %d (process may have exited)", ev.PID))
 		return nil
 	}
 
@@ -175,7 +195,8 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 func (h *DBHelper) LoadSmapsForProcess(pid int) error {
 	threads, err := data.LoadSmapsRanges(pid)
 	if err != nil {
-		// Failed to load smaps - silently skip
+		// Failed to load smaps - report but don't fail
+		h.reportError(fmt.Errorf("failed to load smaps for process %d: %w", pid, err))
 		return nil
 	}
 
@@ -185,7 +206,8 @@ func (h *DBHelper) LoadSmapsForProcess(pid int) error {
 	}
 
 	if len(records) == 0 {
-		// Process not found for smaps loading - silently skip
+		// Process not found for smaps loading - report but don't fail
+		h.reportError(fmt.Errorf("process %d not found in database for smaps loading", pid))
 		return nil
 	}
 

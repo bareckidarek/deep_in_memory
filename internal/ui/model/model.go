@@ -78,6 +78,10 @@ func (m *Model) Init() tea.Cmd { return nil }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case uimsg.ApplicationError:
+		// Set error for display in UI
+		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
+		return m, nil
 	case tea.KeyMsg:
 		if handler, ok := m.keyHandlers()[msg.String()]; ok {
 			return handler()
@@ -104,8 +108,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if msg.Type == tea.MouseLeft && msg.X <= m.leftPaneWidth() {
-			const borderOffset = 1
-			const paddingOffset = 1
+			const borderOffset = constants.BorderOffset
+			const paddingOffset = constants.PaddingOffset
 			adj := msg
 			adj.X = msg.X - borderOffset - paddingOffset
 			adj.Y = msg.Y - borderOffset
@@ -320,6 +324,8 @@ func (m *Model) refreshList() {
 }
 
 // applySelection updates the selected PID and optionally pushes it to the eBPF map.
+// applySelection sets the selected process and optionally pushes it to eBPF.
+// This triggers detailed tracing for the selected process and updates the UI layout.
 func (m *Model) applySelection(pid int, pushToEBPF bool) {
 	m.selectedPID = pid
 	if pushToEBPF && m.setTargetPID != nil {
@@ -330,7 +336,9 @@ func (m *Model) applySelection(pid int, pushToEBPF bool) {
 	m.syncLayout()
 }
 
-// ensureSelection keeps current selection if available or falls back to the first item.
+// ensureSelection maintains the current process selection if the process still exists,
+// otherwise falls back to selecting the first available process in the list.
+// Returns true if a selection was made, false if the list is empty.
 func (m *Model) ensureSelection(items []list.Item) bool {
 	if m.selectedPID != 0 {
 		for idx, item := range items {
@@ -358,7 +366,9 @@ func (m *Model) currentProcessData() (*data.ProcessData, bool) {
 	return pd, ok
 }
 
-// updateViewports recalculates sizes and content for both panes based on current layout.
+// updateViewports calculates viewport dimensions and renders content for both the virtual
+// memory pane (top) and physical memory pane (bottom) based on the selected process data.
+// It handles layout constraints and pagination for memory range display.
 func (m *Model) updateViewports(pd *data.ProcessData) {
 	if pd == nil {
 		return
@@ -398,6 +408,9 @@ func (m *Model) clearViewports() {
 	m.viewportPhysical.SetContent("")
 }
 
+// renderSummary creates a formatted summary header showing process information
+// and memory statistics including reservation, allocation, page-out, and page-in counts.
+// Returns a styled table with color-coded columns for different memory statuses.
 func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCount int) string {
 	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
 	stats := uirender.CalculateStatusStats(pd)
@@ -466,6 +479,8 @@ func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCo
 	return sb.String()
 }
 
+// keyHandlers returns a map of keyboard shortcuts to their corresponding actions.
+// Supports navigation (arrows), selection (Enter), pagination (n/p), and quitting (q/Ctrl+C).
 func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 	return map[string]func() (tea.Model, tea.Cmd){
 		"q":      func() (tea.Model, tea.Cmd) { return m, tea.Quit },

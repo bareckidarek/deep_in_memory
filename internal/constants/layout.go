@@ -1,6 +1,10 @@
 package constants
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Layout constants for the terminal UI
 const (
@@ -36,6 +40,40 @@ const (
 
 	// Phase sampling
 	PhaseSampleLimit = 5
+)
+
+// Event constants for eBPF tracepoints
+const (
+	// Page fault error codes
+	PageFaultErrorCode = 0x6 // User write page fault
+
+	// Swap event error codes
+	SwapEventSuccessCode = 0 // Success code for swap events
+)
+
+// Timing constants
+const (
+	// Cache refresh intervals
+	RangeCacheRefreshInterval = 100 * time.Millisecond
+
+	// eBPF collector retry delays
+	EbpfRetryDelay = 10 * time.Millisecond
+
+	// Application refresh intervals
+	DefaultRefreshInterval = 1 * time.Second
+)
+
+// Data processing constants
+const (
+	// File system units
+	BytesPerKilobyte = 1024
+)
+
+// UI interaction constants
+const (
+	// Mouse event offsets
+	BorderOffset  = 1
+	PaddingOffset = 1
 )
 
 // Color constants for memory status visualization

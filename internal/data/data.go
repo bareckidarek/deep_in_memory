@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"deep_in_memory/internal/constants"
 )
 
 var PageSizeBytes uint64
@@ -159,11 +161,9 @@ type AddrRange struct {
 	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
 }
 
-// SortRanges sorts address ranges according to display rules:
-// 1. [heap] at top
-// 2. Ranges with empty Label, sorted by StartVal
-// 3. Ranges with non-empty Label (no file/lib references), sorted by StartVal
-// 4. Ranges with file/lib references, sorted by StartVal
+// SortRanges orders address ranges for consistent display in the UI.
+// Priority order: heap ranges first, then anonymous ranges, then labeled ranges,
+// and finally file/library-backed ranges. Within each category, ranges are sorted by address.
 func SortRanges(ranges []AddrRange) {
 	sort.SliceStable(ranges, func(i, j int) bool {
 		// Helper to check if label contains file/lib reference
@@ -236,7 +236,9 @@ func (pd *ProcessData) getRangeCache(tid int) *RangeCache {
 	return cache
 }
 
-// rebuildRangeCache rebuilds the range cache for a thread
+// rebuildRangeCache reconstructs the internal cache for fast address range lookups.
+// Creates sorted arrays of range pointers and start addresses for binary search.
+// Called automatically when cache is stale or missing.
 func (pd *ProcessData) rebuildRangeCache(tid int) {
 	cache := pd.getRangeCache(tid)
 
@@ -268,12 +270,14 @@ func (pd *ProcessData) rebuildRangeCache(tid int) {
 	cache.LastUpdate = time.Now()
 }
 
-// findRangeForAddr finds the range containing a specific address using optimized lookup
+// findRangeForAddr efficiently locates the virtual address range containing a specific address.
+// Uses a cached binary search for O(log n) lookup performance, rebuilding the cache
+// if it's stale or doesn't exist. Returns nil if no range contains the address.
 func (pd *ProcessData) findRangeForAddr(tid int, addr uint64) *AddrRange {
 	cache := pd.getRangeCache(tid)
 
 	// Rebuild cache if stale or empty
-	if len(cache.Ranges) == 0 || time.Since(cache.LastUpdate) > time.Millisecond*100 {
+	if len(cache.Ranges) == 0 || time.Since(cache.LastUpdate) > constants.RangeCacheRefreshInterval {
 		pd.rebuildRangeCache(tid)
 		cache = pd.rangeCache[tid]
 	}
@@ -317,7 +321,9 @@ func (pd *ProcessData) getThread(tid int) *ThreadData {
 	return nil
 }
 
-// AddMmapRange adds a new virtual address range for a thread based on mmap event.
+// AddMmapRange records a new virtual memory allocation from an mmap syscall.
+// Creates or finds the thread's range list and adds the new address range.
+// Automatically sorts ranges after insertion for consistent ordering.
 func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
 	if pd.Threads == nil {
 		pd.Threads = []ThreadData{}
@@ -361,9 +367,10 @@ func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
 	pd.invalidateRangeCache(tid)
 }
 
-// ExtendBrkRange extends the heap range for a thread based on brk syscall.
-// If brk==0, ret contains the current program break (start address).
-// Otherwise, brk is the requested end address and ret is the actual end address allocated.
+// ExtendBrkRange manages heap growth/shrinkage from brk syscalls.
+// When brk==0, ret contains current break address (query operation).
+// When brk!=0, ret is the actual allocated break address after attempted change.
+// Maintains a special [heap] range that tracks heap memory usage.
 func (pd *ProcessData) ExtendBrkRange(tid int, brk uint64, ret uint64) {
 	if pd.Threads == nil {
 		pd.Threads = []ThreadData{}

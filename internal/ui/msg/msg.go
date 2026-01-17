@@ -72,3 +72,10 @@ type ProcessSwapUnswap struct {
 type LoadSmapsRequest struct {
 	PID int
 }
+
+// ApplicationError is sent when a non-critical application error occurs.
+// The UI should display this to the user but continue operating.
+type ApplicationError struct {
+	Message  string
+	Severity string // "warning", "error", "info"
+}

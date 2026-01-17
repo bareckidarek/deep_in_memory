@@ -22,12 +22,14 @@ type Model struct {
 	refreshInterval time.Duration
 }
 
-// New constructs the app model with the provided DB, initial dataset, and refresh interval.
+// New creates the main application model that coordinates UI, database, and eBPF collectors.
+// Manages periodic dataset refresh and routes events between eBPF collectors and the UI.
+// The refresh interval controls how often the UI updates with new process data.
 func New(db storedb.Db[data.ProcessData], initial data.Dataset, refresh time.Duration) *Model {
 	return &Model{
 		ui:              uimodel.New(initial),
 		db:              db,
-		dbHelper:        NewDBHelper(db),
+		dbHelper:        NewDBHelper(db, nil), // Will be set later
 		refreshInterval: refresh,
 	}
 }
@@ -37,12 +39,21 @@ func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 	m.ui.SetTargetPIDSetter(fn)
 }
 
+// SetErrorCallback configures error reporting for database operations.
+// Non-critical errors (like missing processes) will be reported through this callback
+// instead of being silently ignored, allowing the UI to inform the user.
+func (m *Model) SetErrorCallback(callback func(error)) {
+	m.dbHelper.SetErrorCallback(callback)
+}
+
 // Init starts periodic refresh.
 func (m *Model) Init() tea.Cmd {
 	return tea.Tick(m.refreshInterval, func(time.Time) tea.Msg { return refreshMsg{} })
 }
 
-// Update routes eBPF events into the DB and refreshes UI data independently.
+// Update processes incoming messages from eBPF collectors and UI.
+// Handles process lifecycle events, memory operations, and periodic refresh.
+// Routes events to appropriate database handlers and manages application state.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case uimsg.ProcessExec:
@@ -68,6 +79,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case uimsg.LoadSmapsRequest:
 		m.dbHelper.LoadSmapsForProcess(v.PID)
+		return m, nil
+	case uimsg.ApplicationError:
+		// Forward error to UI model for display
 		return m, nil
 	case refreshMsg:
 		m.reload()

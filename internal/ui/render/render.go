@@ -77,7 +77,7 @@ func CalculateStatusStats(pd *data.ProcessData) StatusStats {
 
 // HumanBytes formats bytes into a human-readable string.
 func HumanBytes(b int64) string {
-	const unit = 1024
+	const unit = constants.BytesPerKilobyte
 	if b < unit {
 		return fmt.Sprintf("%d B", b)
 	}
@@ -289,6 +289,9 @@ type segment struct {
 }
 
 // renderRangeBar renders a memory range bar with status visualization and text overlay
+// renderRangeBar creates a visual memory bar with status segments and text overlay.
+// Shows proportional colored segments for different memory states (INIT/SWAP/UNSWAP)
+// with address range and size information overlaid on top.
 func renderRangeBar(r data.AddrRange, barWidth int) string {
 	if r.Size == 0 {
 		return fmt.Sprintf("%s [invalid range] %s", r.Start, r.End)
@@ -301,7 +304,9 @@ func renderRangeBar(r data.AddrRange, barWidth int) string {
 	return renderColoredBar(segmentList, overlayText)
 }
 
-// calculateStatusSegments determines the width of each status segment in the bar
+// calculateStatusSegments computes the proportional width of each memory status segment.
+// Converts page counts to pixel widths based on total range size, ensuring
+// segments fit within the available bar width with proper scaling.
 func calculateStatusSegments(r data.AddrRange, expandedBarWidth int) []segment {
 	var segmentList []segment
 	totalWidthUsed := 0
