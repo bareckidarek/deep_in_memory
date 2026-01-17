@@ -11,22 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
 	uimsg "deep_in_memory/internal/ui/msg"
 	uirender "deep_in_memory/internal/ui/render"
-)
-
-const (
-	defaultListWidth   = 30
-	defaultListHeight  = 20
-	leftPanePadding    = 4 // border (2) + padding (2)
-	listWidthFallback  = defaultListWidth + 2
-	minAvailableWidth  = 20
-	minBarWidth        = 10
-	minContentHeight   = 6
-	minViewportHeight  = 3
-	statusBarReduction = 4
-	barWidthBuffer     = 50
 )
 
 // Model wraps the Bubble Tea state for the TUI.
@@ -60,7 +48,7 @@ func New(d data.Dataset) *Model {
 	}
 
 	delegate := newProcessDelegate(m)
-	l := list.New(items, delegate, defaultListWidth, defaultListHeight)
+	l := list.New(items, delegate, constants.DefaultListWidth, constants.DefaultListHeight)
 	l.Title = "Processes"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
@@ -97,7 +85,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.list.SetSize(listWidthFallback, max(m.height-2, defaultListHeight))
+		m.list.SetSize(constants.ListWidthFallback, max(m.height-2, constants.DefaultListHeight))
 		m.syncLayout()
 	case tea.MouseMsg:
 		if msg.Type == tea.MouseWheelUp || msg.Type == tea.MouseWheelDown {
@@ -165,34 +153,34 @@ func (m *Model) syncLayout() {
 func (m *Model) leftPaneWidth() int {
 	listWidth := m.list.Width()
 	if listWidth == 0 {
-		listWidth = listWidthFallback // default width plus default border padding used by list
+		listWidth = constants.ListWidthFallback // default width plus default border padding used by list
 	}
-	return listWidth + leftPanePadding
+	return listWidth + constants.LeftPanePadding
 }
 
 // layoutMetrics returns key layout values used for routing events and rendering.
 func (m *Model) layoutMetrics() (available, rowHeight, secondRowHeight, barWidth int) {
 	available = m.width - m.leftPaneWidth()
-	if available < minAvailableWidth {
-		available = minAvailableWidth
+	if available < constants.MinAvailableWidth {
+		available = constants.MinAvailableWidth
 	}
-	barWidth = available - barWidthBuffer
-	if barWidth < minBarWidth {
-		barWidth = minBarWidth
+	barWidth = available - constants.BarWidthBuffer
+	if barWidth < constants.MinBarWidth {
+		barWidth = constants.MinBarWidth
 	}
 
-	contentHeight := m.height - statusBarReduction
-	if contentHeight < minContentHeight {
-		contentHeight = minContentHeight
+	contentHeight := m.height - constants.StatusBarReduction
+	if contentHeight < constants.MinContentHeight {
+		contentHeight = constants.MinContentHeight
 	}
-	// Virtual memory gets 55%, physical memory gets 45%
-	rowHeight = (contentHeight * 55) / 100
-	if rowHeight < minContentHeight {
-		rowHeight = minContentHeight
+	// Virtual memory gets VirtualMemoryPercent%, physical memory gets PhysicalMemoryPercent%
+	rowHeight = (contentHeight * constants.VirtualMemoryPercent) / 100
+	if rowHeight < constants.MinContentHeight {
+		rowHeight = constants.MinContentHeight
 	}
 	secondRowHeight = contentHeight - rowHeight
-	if secondRowHeight < minContentHeight {
-		secondRowHeight = minContentHeight
+	if secondRowHeight < constants.MinContentHeight {
+		secondRowHeight = constants.MinContentHeight
 	}
 
 	return
@@ -263,20 +251,20 @@ func (d *processDelegate) Render(w io.Writer, m list.Model, index int, item list
 
 	marker := "  "
 	titleStyle := lipgloss.NewStyle()
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	descStyle := lipgloss.NewStyle().Foreground(constants.DescriptionColor)
 
 	if isSelected {
-		marker = "► "                                                       // Selected with Enter
-		titleStyle = titleStyle.Foreground(lipgloss.Color("10")).Bold(true) // Green + bold
+		marker = "► " // Selected with Enter
+		titleStyle = titleStyle.Foreground(constants.SelectedColor).Bold(true)
 	}
 
 	if isCursor {
 		if !isSelected {
-			marker = "• "                                            // Just cursor focus
-			titleStyle = titleStyle.Foreground(lipgloss.Color("12")) // Blue
+			marker = "• " // Just cursor focus
+			titleStyle = titleStyle.Foreground(constants.FocusColor)
 		}
-		titleStyle = titleStyle.Background(lipgloss.Color("236")) // Dark background
-		descStyle = descStyle.Background(lipgloss.Color("236"))
+		titleStyle = titleStyle.Background(constants.BackgroundColor)
+		descStyle = descStyle.Background(constants.BackgroundColor)
 	}
 
 	title := titleStyle.Render(marker + li.Title())
@@ -381,19 +369,19 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	virtualCount := uirender.ActiveVirtualCount(pd.Virtual)
 	summary := m.renderSummary(proc, pd, virtualCount)
 
-	virtualWidth := available - leftPanePadding
-	if virtualWidth < minBarWidth {
-		virtualWidth = minBarWidth
+	virtualWidth := available - constants.LeftPanePadding
+	if virtualWidth < constants.MinBarWidth {
+		virtualWidth = constants.MinBarWidth
 	}
 	physicalWidth := virtualWidth
 
 	virtualHeight := rowHeight - 2
-	if virtualHeight < minViewportHeight {
-		virtualHeight = minViewportHeight
+	if virtualHeight < constants.MinViewportHeight {
+		virtualHeight = constants.MinViewportHeight
 	}
 	physicalHeight := secondRowHeight - 2
-	if physicalHeight < minViewportHeight {
-		physicalHeight = minViewportHeight
+	if physicalHeight < constants.MinViewportHeight {
+		physicalHeight = constants.MinViewportHeight
 	}
 
 	m.viewportVirtual.Width = virtualWidth
@@ -419,11 +407,7 @@ func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCo
 	sb.WriteString(fmt.Sprintf("Process: %s (%d)\n", proc.Name, proc.PID))
 	sb.WriteString(fmt.Sprintf("Start (UTC): %s\n\n", startUTC))
 
-	// Define colors for each column
-	grayColor := "#666666"  // reservation
-	greenColor := "#00af5f" // allocation (INIT)
-	redColor := "#ff5f5f"   // page-out (SWAP)
-	blueColor := "#5f87ff"  // page-in (UNSWAP)
+	// Use colors from constants package
 
 	// Define column widths
 	labelWidth := 8
@@ -435,18 +419,18 @@ func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCo
 	// Create styles
 	borderStyle := lipgloss.NewStyle().Border(lipgloss.NormalBorder())
 	labelStyle := lipgloss.NewStyle().Width(labelWidth)
-	col1Style := lipgloss.NewStyle().Width(col1Width).Foreground(lipgloss.Color(grayColor))
-	col2Style := lipgloss.NewStyle().Width(col2Width).Foreground(lipgloss.Color(greenColor))
-	col3Style := lipgloss.NewStyle().Width(col3Width).Foreground(lipgloss.Color(redColor))
-	col4Style := lipgloss.NewStyle().Width(col4Width).Foreground(lipgloss.Color(blueColor))
+	col1Style := lipgloss.NewStyle().Width(col1Width).Foreground(lipgloss.Color(constants.GrayColor))
+	col2Style := lipgloss.NewStyle().Width(col2Width).Foreground(lipgloss.Color(constants.GreenColor))
+	col3Style := lipgloss.NewStyle().Width(col3Width).Foreground(lipgloss.Color(constants.RedColor))
+	col4Style := lipgloss.NewStyle().Width(col4Width).Foreground(lipgloss.Color(constants.BlueColor))
 
 	// Build table rows
 	headerRow := lipgloss.JoinHorizontal(lipgloss.Top,
 		labelStyle.Render(""),
-		col1Style.Render("virtual address space reservation"),
-		col2Style.Render("physical page allocation"),
-		col3Style.Render("swap-out / page-out"),
-		col4Style.Render("swap-in / page-in"),
+		col1Style.Render(constants.StatusReservation),
+		col2Style.Render(constants.StatusAllocation),
+		col3Style.Render(constants.StatusPageOut),
+		col4Style.Render(constants.StatusPageIn),
 	)
 
 	pagesRow := lipgloss.JoinHorizontal(lipgloss.Top,

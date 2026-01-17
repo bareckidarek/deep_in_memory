@@ -1,11 +1,10 @@
 package app
 
 import (
-	"strconv"
+	"log"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/timshannon/bolthold"
 
 	"deep_in_memory/internal/data"
 	storedb "deep_in_memory/internal/thirdparty/db"
@@ -20,6 +19,7 @@ type refreshMsg struct{}
 type Model struct {
 	ui              *uimodel.Model
 	db              storedb.Db[data.ProcessData]
+	dbHelper        *DBHelper
 	refreshInterval time.Duration
 }
 
@@ -28,6 +28,7 @@ func New(db storedb.Db[data.ProcessData], initial data.Dataset, refresh time.Dur
 	return &Model{
 		ui:              uimodel.New(initial),
 		db:              db,
+		dbHelper:        NewDBHelper(db),
 		refreshInterval: refresh,
 	}
 }
@@ -46,28 +47,44 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case uimsg.ProcessExec:
-		_ = m.persistExec(v)
+		if err := m.dbHelper.HandleProcessExec(v); err != nil {
+			log.Printf("Failed to handle exec event for PID %d: %v", v.PID, err)
+		}
 		return m, nil
 	case uimsg.ProcessExit:
-		_ = m.handleExit(v)
+		if err := m.dbHelper.HandleProcessExit(v); err != nil {
+			log.Printf("Failed to handle exit event for PID %d: %v", v.PID, err)
+		}
 		return m, nil
 	case uimsg.ProcessMmap:
-		_ = m.handleMmap(v)
+		if err := m.dbHelper.HandleMmapEvent(v); err != nil {
+			log.Printf("Failed to handle mmap event for PID %d: %v", v.PID, err)
+		}
 		return m, nil
 	case uimsg.ProcessMunmap:
-		_ = m.handleMunmap(v)
+		if err := m.dbHelper.HandleMunmapEvent(v); err != nil {
+			log.Printf("Failed to handle munmap event for PID %d: %v", v.PID, err)
+		}
 		return m, nil
 	case uimsg.ProcessBrk:
-		_ = m.handleBrk(v)
+		if err := m.dbHelper.HandleBrkEvent(v); err != nil {
+			log.Printf("Failed to handle brk event for PID %d: %v", v.PID, err)
+		}
 		return m, nil
 	case uimsg.ProcessPageFault:
-		_ = m.handlePageFault(v)
+		if err := m.dbHelper.HandlePageFaultEvent(v); err != nil {
+			log.Printf("Failed to handle page fault for PID %d: %v", v.PID, err)
+		}
 		return m, nil
 	case uimsg.ProcessSwapUnswap:
-		_ = m.handleSwap(v)
+		if err := m.dbHelper.HandleSwapEvent(v); err != nil {
+			log.Printf("Failed to handle swap event for PID %d: %v", v.PID, err)
+		}
 		return m, nil
 	case uimsg.LoadSmapsRequest:
-		_ = m.handleLoadSmaps(v)
+		if err := m.dbHelper.LoadSmapsForProcess(v.PID); err != nil {
+			log.Printf("Failed to load smaps for PID %d: %v", v.PID, err)
+		}
 		return m, nil
 	case refreshMsg:
 		m.reload()
@@ -89,157 +106,11 @@ func (m *Model) View() string {
 func (m *Model) reload() {
 	procs, err := m.db.All()
 	if err != nil {
+		log.Printf("Failed to reload processes from database: %v", err)
+		// Don't crash the UI, just log the error and continue with empty dataset
+		m.ui.SetDataset(data.Dataset{Processes: make(map[int]*data.ProcessData), Order: []int{}})
 		return
 	}
 	ds := data.BuildDataset(procs)
 	m.ui.SetDataset(ds)
-}
-
-func (m *Model) persistExec(ev uimsg.ProcessExec) error {
-	pid := strconv.Itoa(ev.PID)
-	record := data.ProcessData{
-		Proc:    data.Process{PID: ev.PID, Name: ev.Comm, StartTime: ev.Timestamp.UTC()},
-		Virtual: make(map[string]*data.VirtualPage),
-		PFNs:    make(map[string]*data.PFNState),
-		Threads: []data.ThreadData{},
-	}
-	return m.db.Upsert(pid, &record)
-}
-
-func (m *Model) handleExit(ev uimsg.ProcessExit) error {
-	key := strconv.Itoa(ev.PID)
-	return m.db.Delete(key)
-}
-
-func (m *Model) handleMmap(ev uimsg.ProcessMmap) error {
-	// Retrieve existing record
-	key := strconv.Itoa(ev.PID)
-	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
-	var record *data.ProcessData
-	if err != nil || len(records) == 0 {
-		// Process not found, create it
-		record = &data.ProcessData{
-			Proc:    data.Process{PID: ev.PID, Name: ev.Comm, StartTime: ev.Timestamp.UTC()},
-			Virtual: make(map[string]*data.VirtualPage),
-			PFNs:    make(map[string]*data.PFNState),
-			Threads: []data.ThreadData{},
-		}
-	} else {
-		// Update existing record
-		record = &records[0]
-	}
-	record.AddMmapRange(ev.TID, ev.Addr, ev.Len)
-	return m.db.Upsert(key, record)
-}
-
-func (m *Model) handleBrk(ev uimsg.ProcessBrk) error {
-	// Retrieve existing record
-	key := strconv.Itoa(ev.PID)
-	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
-	var record *data.ProcessData
-	if err != nil || len(records) == 0 {
-		// Process not found, create it
-		record = &data.ProcessData{
-			Proc:    data.Process{PID: ev.PID, Name: ev.Comm, StartTime: ev.Timestamp.UTC()},
-			Virtual: make(map[string]*data.VirtualPage),
-			PFNs:    make(map[string]*data.PFNState),
-			Threads: []data.ThreadData{},
-		}
-	} else {
-		// Update existing record
-		record = &records[0]
-	}
-	record.ExtendBrkRange(ev.TID, ev.Brk, ev.Ret)
-	return m.db.Upsert(key, record)
-}
-
-func (m *Model) handleMunmap(ev uimsg.ProcessMunmap) error {
-	// Retrieve existing record
-	key := strconv.Itoa(ev.PID)
-	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
-	if err != nil || len(records) == 0 {
-		// Process not found, nothing to unmap
-		return nil
-	}
-
-	// Update existing record
-	record := &records[0]
-	record.RemoveMmapRange(ev.TID, ev.Addr, ev.Len)
-	return m.db.Upsert(key, record)
-}
-
-func (m *Model) handlePageFault(ev uimsg.ProcessPageFault) error {
-
-	if ev.ErrorCode != 0x6 {
-		// Ignore page faults with other error code than 0x6 (present=0, write=1, user=1)
-		return nil
-	}
-
-	// Retrieve existing record
-	key := strconv.Itoa(ev.PID)
-	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
-	if err != nil || len(records) == 0 {
-		return nil
-	}
-
-	// Update existing record
-	record := &records[0]
-	record.AddPageFault(ev.TID, ev.Address)
-
-	return m.db.Upsert(key, record)
-}
-
-func (m *Model) handleSwap(ev uimsg.ProcessSwapUnswap) error {
-
-	if ev.ErrorCode != 0 {
-		// Ignore swap/unswap events with error codes
-		return nil
-	}
-
-	// Retrieve existing record
-	key := strconv.Itoa(ev.PID)
-	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
-	if err != nil || len(records) == 0 {
-		return nil
-	}
-
-	// Update existing record
-	record := &records[0]
-	record.AddSwapStatus(ev.TID, ev.Address, ev.IsSwap)
-
-	return m.db.Upsert(key, record)
-}
-
-func (m *Model) handleLoadSmaps(ev uimsg.LoadSmapsRequest) error {
-	// Load memory ranges from /proc/PID/smaps
-	threads, err := data.LoadSmapsRanges(ev.PID)
-	if err != nil {
-		// Ignore errors (process might have exited or no permission)
-		return nil
-	}
-
-	// Retrieve existing record
-	key := strconv.Itoa(ev.PID)
-	records, err := m.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
-	var record *data.ProcessData
-	if err != nil || len(records) == 0 {
-		// Process not found in DB, skip
-		return nil
-	}
-
-	// Merge loaded ranges with existing record
-	record = &records[0]
-	if len(threads) > 0 {
-		// Replace or merge threads - for simplicity, replace all ranges
-		record.Threads = threads
-	}
-
-	// Update DB and trigger UI refresh
-	if err := m.db.Upsert(key, record); err != nil {
-		return err
-	}
-
-	// Trigger immediate refresh to show updated ranges
-	m.reload()
-	return nil
 }

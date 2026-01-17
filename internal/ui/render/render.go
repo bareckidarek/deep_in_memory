@@ -8,15 +8,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
-)
-
-var statusOrder = []string{"SWAP", "UNSWAP", "INIT"}
-
-const (
-	matrixColumns    = 8
-	matrixMaxRows    = 6
-	phaseSampleLimit = 5
 )
 
 // ActiveVirtualCount returns the number of non-freed virtual pages.
@@ -140,7 +133,7 @@ func renderSectionWithLegend(title string, legend string, viewportWidth int, par
 	compact := make([]string, 0, len(parts)+1)
 	// Create title line with legend on the right
 	// Calculate plain text length (lipgloss styles add ANSI codes that don't count for visual width)
-	legendPlainLen := 59 // "██ reservation  ██ allocation  ██ page-out  ██ page-in" = 59 chars visible
+	legendPlainLen := constants.StatusLegendWidth
 	titleLen := len(title)
 	spacing := viewportWidth - titleLen - legendPlainLen
 	if spacing < 2 {
@@ -159,12 +152,16 @@ func renderSectionWithLegend(title string, legend string, viewportWidth int, par
 
 func buildColorLegend() string {
 	// Build colored legend with 2-character width boxes
-	grayBox := lipgloss.NewStyle().Background(lipgloss.Color("#666666")).Render("  ")
+	grayBox := lipgloss.NewStyle().Background(lipgloss.Color(constants.GrayColor)).Render("  ")
 	initBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("INIT"))).Render("  ")
 	swapBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("SWAP"))).Render("  ")
 	unswapBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("UNSWAP"))).Render("  ")
 
-	return fmt.Sprintf("%s reservation  %s allocation  %s page-out  %s page-in", grayBox, initBox, swapBox, unswapBox)
+	return fmt.Sprintf("%s %s  %s %s  %s %s  %s %s",
+		grayBox, constants.StatusReservation,
+		initBox, constants.StatusAllocation,
+		swapBox, constants.StatusPageOut,
+		unswapBox, constants.StatusPageIn)
 }
 
 func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) string {
@@ -172,7 +169,7 @@ func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) strin
 		return "Virtual ranges: none"
 	}
 
-	const rangesPerPage = 25
+	const rangesPerPage = constants.RangesPerPage
 
 	// Count total ranges across all threads
 	totalRanges := 0
@@ -285,24 +282,31 @@ func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) strin
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// segment represents a colored segment of the memory bar
+type segment struct {
+	status string
+	width  int
+}
+
+// renderRangeBar renders a memory range bar with status visualization and text overlay
 func renderRangeBar(r data.AddrRange, barWidth int) string {
 	if r.Size == 0 {
 		return fmt.Sprintf("%s [invalid range] %s", r.Start, r.End)
 	}
 
-	// Calculate expanded bar width (addresses are now inside)
-	// Estimate: ~16 chars per address + info text ~15 chars = ~40 chars
 	expandedBarWidth := barWidth + 40
+	segmentList := calculateStatusSegments(r, expandedBarWidth)
+	overlayText := buildOverlayText(r, expandedBarWidth)
 
-	// Build status segments with their widths
-	type segment struct {
-		status string
-		width  int
-	}
+	return renderColoredBar(segmentList, overlayText)
+}
+
+// calculateStatusSegments determines the width of each status segment in the bar
+func calculateStatusSegments(r data.AddrRange, expandedBarWidth int) []segment {
 	var segmentList []segment
 	totalWidthUsed := 0
 
-	for _, status := range statusOrder {
+	for _, status := range constants.StatusOrder {
 		count := 0
 		if statusCount := r.Statuses[status]; statusCount != nil {
 			count = statusCount.Count
@@ -324,71 +328,68 @@ func renderRangeBar(r data.AddrRange, barWidth int) string {
 		segmentList = append(segmentList, segment{status: "gray", width: remainder})
 	}
 
-	// Prepare overlay text
+	return segmentList
+}
+
+// buildOverlayText creates the text overlay for the memory bar
+func buildOverlayText(r data.AddrRange, expandedBarWidth int) string {
 	startAddr := r.Start
-	var endInfo string
 
-	// If there's a label, show it in the middle instead of addresses
+	// If there's a label, show it in the middle instead of just addresses
 	if r.Label != "" {
-		sizeBytes := r.Size * data.PageSizeBytes
-		endInfo = fmt.Sprintf("%s (100%%=%s [%dp])", r.End, HumanBytes(int64(sizeBytes)), r.Size)
-		// Put label in the middle
-		labelText := r.Label
-		middlePos := (expandedBarWidth - len(labelText)) / 2
-		if middlePos < len(startAddr)+1 {
-			middlePos = len(startAddr) + 1
-		}
-		endPos := expandedBarWidth - len(endInfo)
-		if endPos < middlePos+len(labelText)+1 {
-			endPos = middlePos + len(labelText) + 1
-		}
-
-		overlayText := startAddr + strings.Repeat(" ", middlePos-len(startAddr)) + labelText + strings.Repeat(" ", endPos-middlePos-len(labelText)) + endInfo
-		if len(overlayText) > expandedBarWidth {
-			overlayText = overlayText[:expandedBarWidth]
-		} else if len(overlayText) < expandedBarWidth {
-			overlayText = overlayText + strings.Repeat(" ", expandedBarWidth-len(overlayText))
-		}
-
-		// Build the bar with text overlay character by character
-		var result strings.Builder
-		textPos := 0
-
-		for _, seg := range segmentList {
-			bgColor := colorForStatus(seg.status)
-			if seg.status == "gray" {
-				bgColor = "#666666"
-			}
-
-			// Render this segment with overlay text
-			for i := 0; i < seg.width && textPos < len(overlayText); i++ {
-				char := string(overlayText[textPos])
-				styled := lipgloss.NewStyle().
-					Background(lipgloss.Color(bgColor)).
-					Foreground(lipgloss.Color("#000000")).
-					Bold(true).
-					Render(char)
-				result.WriteString(styled)
-				textPos++
-			}
-		}
-		return result.String()
+		return buildLabelOverlay(r, startAddr, expandedBarWidth)
 	}
 
-	// Original behavior without label
-	sizeBytes := r.Size * data.PageSizeBytes
-	endInfo = fmt.Sprintf("%s (100%%=%s [%dp])", r.End, HumanBytes(int64(sizeBytes)), r.Size)
+	return buildAddressOverlay(r, startAddr, expandedBarWidth)
+}
 
-	// Build the bar with text overlay character by character
+// buildLabelOverlay creates overlay text with a centered label
+func buildLabelOverlay(r data.AddrRange, startAddr string, expandedBarWidth int) string {
+	sizeBytes := r.Size * data.PageSizeBytes
+	endInfo := fmt.Sprintf("%s (100%%=%s [%dp])", r.End, HumanBytes(int64(sizeBytes)), r.Size)
+
+	labelText := r.Label
+	middlePos := (expandedBarWidth - len(labelText)) / 2
+	if middlePos < len(startAddr)+1 {
+		middlePos = len(startAddr) + 1
+	}
+	endPos := expandedBarWidth - len(endInfo)
+	if endPos < middlePos+len(labelText)+1 {
+		endPos = middlePos + len(labelText) + 1
+	}
+
+	overlayText := startAddr + strings.Repeat(" ", middlePos-len(startAddr)) + labelText +
+		strings.Repeat(" ", endPos-middlePos-len(labelText)) + endInfo
+
+	return truncateOverlayText(overlayText, expandedBarWidth)
+}
+
+// buildAddressOverlay creates overlay text with start and end addresses
+func buildAddressOverlay(r data.AddrRange, startAddr string, expandedBarWidth int) string {
+	sizeBytes := r.Size * data.PageSizeBytes
+	endInfo := fmt.Sprintf("%s (100%%=%s [%dp])", r.End, HumanBytes(int64(sizeBytes)), r.Size)
+
+	overlayText := startAddr + strings.Repeat(" ", expandedBarWidth-len(startAddr)-len(endInfo)) + endInfo
+	return truncateOverlayText(overlayText, expandedBarWidth)
+}
+
+// truncateOverlayText ensures overlay text fits within the bar width
+func truncateOverlayText(overlayText string, maxWidth int) string {
+	if len(overlayText) > maxWidth {
+		return overlayText[:maxWidth]
+	} else if len(overlayText) < maxWidth {
+		return overlayText + strings.Repeat(" ", maxWidth-len(overlayText))
+	}
+	return overlayText
+}
+
+// renderColoredBar renders the final colored bar with text overlay
+func renderColoredBar(segmentList []segment, overlayText string) string {
 	var result strings.Builder
 	textPos := 0
-	overlayText := startAddr + strings.Repeat(" ", expandedBarWidth-len(startAddr)-len(endInfo)) + endInfo
 
 	for _, seg := range segmentList {
 		bgColor := colorForStatus(seg.status)
-		if seg.status == "gray" {
-			bgColor = "#666666"
-		}
 
 		// Render this segment with overlay text
 		for i := 0; i < seg.width && textPos < len(overlayText); i++ {
@@ -409,13 +410,13 @@ func renderRangeBar(r data.AddrRange, barWidth int) string {
 func colorForStatus(status string) string {
 	switch status {
 	case "INIT":
-		return "#00af5f" // green
+		return constants.GreenColor
 	case "SWAP":
-		return "#ff5f5f" // red
+		return constants.RedColor
 	case "UNSWAP":
-		return "#5f87ff" // blue
+		return constants.BlueColor
 	default:
-		return "#666666" // gray fallback
+		return constants.GrayColor
 	}
 }
 
@@ -439,7 +440,7 @@ func statusBlock(status string, width int) string {
 }
 
 func grayBlock(width int) string {
-	return lipgloss.NewStyle().Background(lipgloss.Color("#666666")).Render(strings.Repeat(" ", width))
+	return lipgloss.NewStyle().Background(lipgloss.Color(constants.GrayColor)).Render(strings.Repeat(" ", width))
 }
 
 func treeConnector(idx, total int) string {
@@ -460,17 +461,17 @@ func renderMatrix(label string, entries []string) string {
 	if len(entries) == 0 {
 		return fmt.Sprintf("%s matrix: none", label)
 	}
-	rows := (len(entries) + matrixColumns - 1) / matrixColumns
-	if rows > matrixMaxRows {
-		rows = matrixMaxRows // cap rows to keep view compact
+	rows := (len(entries) + constants.MatrixColumns - 1) / constants.MatrixColumns
+	if rows > constants.MatrixMaxRows {
+		rows = constants.MatrixMaxRows // cap rows to keep view compact
 	}
-	maxCells := rows * matrixColumns
+	maxCells := rows * constants.MatrixColumns
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("%s matrix (%d shown):\n", label, min(len(entries), maxCells)))
 
 	for i := 0; i < maxCells && i < len(entries); i++ {
-		if i%matrixColumns == 0 && i != 0 {
+		if i%constants.MatrixColumns == 0 && i != 0 {
 			b.WriteString("\n")
 		}
 		b.WriteString(fmt.Sprintf("[%s] ", shorten(entries[i])))
@@ -509,8 +510,8 @@ func renderPhases(vmap map[string]*data.VirtualPage) string {
 			continue
 		}
 		samples := addrs
-		if len(addrs) > phaseSampleLimit {
-			samples = addrs[:phaseSampleLimit]
+		if len(addrs) > constants.PhaseSampleLimit {
+			samples = addrs[:constants.PhaseSampleLimit]
 		}
 		b.WriteString(fmt.Sprintf("- %s: %d (e.g., %s)\n", ph, len(addrs), strings.Join(samples, ", ")))
 	}
