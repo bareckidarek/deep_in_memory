@@ -351,7 +351,7 @@ func buildOverlayText(r data.AddrRange, expandedBarWidth int) string {
 // buildLabelOverlay creates overlay text with a centered label
 func buildLabelOverlay(r data.AddrRange, startAddr string, expandedBarWidth int) string {
 	sizeBytes := r.Size * data.PageSizeBytes
-	endInfo := fmt.Sprintf("%s (100%%=%s [%dp])", r.End, HumanBytes(int64(sizeBytes)), r.Size)
+	endInfo := fmt.Sprintf("%s (100%%=%dp [%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)))
 
 	labelText := r.Label
 	middlePos := (expandedBarWidth - len(labelText)) / 2
@@ -372,7 +372,7 @@ func buildLabelOverlay(r data.AddrRange, startAddr string, expandedBarWidth int)
 // buildAddressOverlay creates overlay text with start and end addresses
 func buildAddressOverlay(r data.AddrRange, startAddr string, expandedBarWidth int) string {
 	sizeBytes := r.Size * data.PageSizeBytes
-	endInfo := fmt.Sprintf("%s (100%%=%s [%dp])", r.End, HumanBytes(int64(sizeBytes)), r.Size)
+	endInfo := fmt.Sprintf("%s (100%%=%dp [%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)))
 
 	overlayText := startAddr + strings.Repeat(" ", expandedBarWidth-len(startAddr)-len(endInfo)) + endInfo
 	return truncateOverlayText(overlayText, expandedBarWidth)

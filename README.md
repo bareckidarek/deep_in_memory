@@ -25,7 +25,7 @@ A terminal UI for exploring Linux process memory activity with live eBPF tracing
   - Green: initialized pages (INIT - page faulted)
   - Orange: swapped pages (SWAP)
   - Blue: recovered from swap (UNSWAP)
-- **Range information**: Each bar displays `start-end (100%=size [Xp])` where:
+- **Range information**: Each bar displays `start-end (100%=Xp [size])` where:
   - `size`: total range size in human-readable units (kB, MB, GB)
   - `[Xp]`: number of pages in range
 - **Per-thread breakdown**: Shows separate memory ranges for each thread (TID)
