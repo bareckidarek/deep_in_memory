@@ -1,0 +1,62 @@
+package ebpf
+
+import (
+	"context"
+	"sync"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/cilium/ebpf"
+)
+
+// Collector defines the interface for eBPF collectors
+type Collector interface {
+	Start(ctx context.Context, send func(tea.Msg)) (func() error, error)
+}
+
+// SharedState provides thread-safe access to shared eBPF resources.
+// Manages the target PID for filtering events across multiple collectors.
+// Uses RWMutex to allow concurrent reads while ensuring exclusive writes.
+type SharedState struct {
+	mu        sync.RWMutex
+	targetPID int
+	ebpfMap   *ebpf.Map
+}
+
+// NewSharedState creates a new shared state instance for managing eBPF resources.
+// Initializes with the provided eBPF map for target PID filtering.
+func NewSharedState(ebpfMap *ebpf.Map) *SharedState {
+	return &SharedState{
+		ebpfMap: ebpfMap,
+	}
+}
+
+// SetTargetPID safely updates the target PID for event filtering.
+// Acquires exclusive lock to ensure atomic update of both local state and eBPF map.
+// This controls which process events are traced by all collectors.
+func (s *SharedState) SetTargetPID(pid int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.targetPID = pid
+
+	// Update eBPF map - assuming it's an array map with single element at index 0
+	if s.ebpfMap != nil {
+		return s.ebpfMap.Put(uint32(0), uint32(pid))
+	}
+
+	return nil
+}
+
+// GetTargetPID safely reads the current target PID value.
+// Uses read lock to allow concurrent access by multiple collectors.
+func (s *SharedState) GetTargetPID() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.targetPID
+}
+
+// GetEbpfMap returns the underlying eBPF map for collectors requiring direct access.
+// Used by collectors that need to share the map for map replacements.
+func (s *SharedState) GetEbpfMap() *ebpf.Map {
+	return s.ebpfMap
+}
