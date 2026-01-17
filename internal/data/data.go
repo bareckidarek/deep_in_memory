@@ -56,24 +56,78 @@ type ThreadData struct {
 	Ranges []AddrRange
 }
 
-// StatusCount tracks count of addresses in a particular status.
+// StatusCount tracks count and list of page offsets in a particular status.
 type StatusCount struct {
-	Count int `json:"count"`
+	Count int      `json:"count"`
+	Value []uint64 `json:"value,omitempty"` // List of page offsets (in pages, not bytes) from range start
+}
+
+// addPageToStatus adds a page offset to a specific status.
+// The page is removed from all other statuses first (a page can only be in one status).
+// pageOffset is in pages (not bytes) from the range start.
+func (r *AddrRange) addPageToStatus(pageOffset uint64, status string) {
+	if r.Statuses == nil {
+		r.Statuses = make(map[string]*StatusCount)
+	}
+
+	// Remove page from all other statuses
+	for otherStatus := range r.Statuses {
+		if otherStatus != status {
+			r.removePageFromStatus(pageOffset, otherStatus)
+		}
+	}
+
+	// Initialize status if needed
+	if r.Statuses[status] == nil {
+		r.Statuses[status] = &StatusCount{Value: []uint64{}}
+	}
+
+	// Check if page already exists in this status
+	for _, offset := range r.Statuses[status].Value {
+		if offset == pageOffset {
+			return // Already in this status
+		}
+	}
+
+	// Add page to status
+	r.Statuses[status].Value = append(r.Statuses[status].Value, pageOffset)
+	r.Statuses[status].Count = len(r.Statuses[status].Value)
+}
+
+// removePageFromStatus removes a page offset from a specific status.
+func (r *AddrRange) removePageFromStatus(pageOffset uint64, status string) {
+	if r.Statuses == nil || r.Statuses[status] == nil {
+		return
+	}
+
+	// Find and remove page
+	for i, offset := range r.Statuses[status].Value {
+		if offset == pageOffset {
+			// Remove by swapping with last element and truncating
+			lastIdx := len(r.Statuses[status].Value) - 1
+			r.Statuses[status].Value[i] = r.Statuses[status].Value[lastIdx]
+			r.Statuses[status].Value = r.Statuses[status].Value[:lastIdx]
+			r.Statuses[status].Count = len(r.Statuses[status].Value)
+			return
+		}
+	}
 }
 
 // incrementStatus increments the count for a given status in the range.
+// Deprecated: Use addPageToStatus instead.
 func (r *AddrRange) incrementStatus(status string) {
 	if r.Statuses == nil {
 		r.Statuses = make(map[string]*StatusCount)
 	}
 	if r.Statuses[status] == nil {
-		r.Statuses[status] = &StatusCount{}
+		r.Statuses[status] = &StatusCount{Value: []uint64{}}
 	}
 	r.Statuses[status].Count++
 }
 
 // decrementStatus decrements the count for a given status in the range.
 // If count goes below 0, it's clamped to 0.
+// Deprecated: Use removePageFromStatus instead.
 func (r *AddrRange) decrementStatus(status string) {
 	if r.Statuses == nil {
 		return
@@ -303,12 +357,17 @@ func (pd *ProcessData) AddPageFault(tid int, faultAddr uint64) {
 		return
 	}
 
+	// Calculate page address (align to page boundary)
+	pageAddr := (faultAddr / PageSizeBytes) * PageSizeBytes
+
 	// Find range containing faultAddr
 	for rangeIdx := range pd.Threads[threadIdx].Ranges {
 		r := &pd.Threads[threadIdx].Ranges[rangeIdx]
-		if faultAddr >= r.StartVal && faultAddr < r.EndVal {
-			// Found the range - increment INIT count
-			r.incrementStatus("INIT")
+		if pageAddr >= r.StartVal && pageAddr < r.EndVal {
+			// Calculate offset in pages from range start
+			pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
+			// Found the range - add page offset to INIT status
+			r.addPageToStatus(pageOffset, "INIT")
 			return
 		}
 	}
@@ -346,23 +405,22 @@ func (pd *ProcessData) AddSwapStatus(tid int, swapAddr uint64, isSwap bool) {
 }
 
 func (pd *ProcessData) addSwapToThread(threadIdx int, swapAddr uint64, isSwap bool) bool {
+	// Calculate page address (align to page boundary)
+	pageAddr := (swapAddr / PageSizeBytes) * PageSizeBytes
+
 	// Find range containing swapAddr
 	for rangeIdx := range pd.Threads[threadIdx].Ranges {
 		r := &pd.Threads[threadIdx].Ranges[rangeIdx]
-		if swapAddr >= r.StartVal && swapAddr < r.EndVal {
+		if pageAddr >= r.StartVal && pageAddr < r.EndVal {
+			// Calculate offset in pages from range start
+			pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
 			// Found the range
 			if isSwap {
-				// swap_writepage: SWAP++, INIT--
-				r.incrementStatus("SWAP")
-				r.decrementStatus("INIT")
+				// swap_writepage: add page offset to SWAP (removes from INIT/UNSWAP automatically)
+				r.addPageToStatus(pageOffset, "SWAP")
 			} else {
-				// do_swap_page: UNSWAP++, SWAP--
-				r.incrementStatus("UNSWAP")
-				r.decrementStatus("SWAP")
-				// If SWAP went to 0, also decrement INIT
-				if r.Statuses != nil && r.Statuses["SWAP"] != nil && r.Statuses["SWAP"].Count <= 0 {
-					r.decrementStatus("INIT")
-				}
+				// do_swap_page: add page offset to UNSWAP (removes from SWAP/INIT automatically)
+				r.addPageToStatus(pageOffset, "UNSWAP")
 			}
 			return true
 		}

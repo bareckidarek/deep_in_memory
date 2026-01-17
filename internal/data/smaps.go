@@ -113,9 +113,9 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 			}
 
 			// Initialize counters to zero
-			newRange.Statuses["INIT"] = &StatusCount{Count: 0}
-			newRange.Statuses["SWAP"] = &StatusCount{Count: 0}
-			newRange.Statuses["UNSWAP"] = &StatusCount{Count: 0}
+			newRange.Statuses["INIT"] = &StatusCount{Count: 0, Value: []uint64{}}
+			newRange.Statuses["SWAP"] = &StatusCount{Count: 0, Value: []uint64{}}
+			newRange.Statuses["UNSWAP"] = &StatusCount{Count: 0, Value: []uint64{}}
 
 			currentRange = &newRange
 		} else if currentRange != nil {
