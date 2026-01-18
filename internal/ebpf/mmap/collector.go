@@ -15,13 +15,15 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
+	"deep_in_memory/internal/constants"
+	ebpfshared "deep_in_memory/internal/ebpf"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
 // Start attaches mmap/munmap tracepoints and streams events to the provided send function.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
-// Requires the target_pid map from the sched module to filter events.
-func Start(ctx context.Context, send func(tea.Msg), targetPidMap *ebpf.Map) (func() error, error) {
+// Requires the SharedState from the sched module to filter events.
+func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpfshared.SharedState) (func() error, error) {
 	var objs MmapProgObjects
 	spec, err := LoadMmapProg()
 	if err != nil {
@@ -36,7 +38,7 @@ func Start(ctx context.Context, send func(tea.Msg), targetPidMap *ebpf.Map) (fun
 			PinPath: "",
 		},
 		MapReplacements: map[string]*ebpf.Map{
-			"target_pid": targetPidMap,
+			"target_pid": sharedState.GetEbpfMap(),
 		},
 	}
 
@@ -99,7 +101,7 @@ func Start(ctx context.Context, send func(tea.Msg), targetPidMap *ebpf.Map) (fun
 					return
 				}
 				// skip transient errors
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(constants.EbpfRetryDelay)
 				continue
 			}
 

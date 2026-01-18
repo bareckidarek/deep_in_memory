@@ -6,19 +6,21 @@ import (
 	"log"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"deep_in_memory/internal/app"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
+	ebpfshared "deep_in_memory/internal/ebpf"
 	"deep_in_memory/internal/ebpf/brk"
 	"deep_in_memory/internal/ebpf/mmap"
 	"deep_in_memory/internal/ebpf/page_fault"
 	"deep_in_memory/internal/ebpf/sched"
 	"deep_in_memory/internal/ebpf/swap"
 	storedb "deep_in_memory/internal/thirdparty/db"
+	uimsg "deep_in_memory/internal/ui/msg"
 )
 
 func main() {
@@ -41,46 +43,91 @@ func main() {
 		log.Fatalf("failed to read initial data: %v", err)
 	}
 	initial := data.BuildDataset(initialProcs)
-	appModel := app.New(store, initial, time.Second)
+	appModel := app.New(store, initial, constants.DefaultRefreshInterval)
 	p := tea.NewProgram(appModel, tea.WithAltScreen(), tea.WithMouseAllMotion())
 
-	// Start sched collector and get the shared target_pid map
-	schedCleanup, setTargetPID, targetPidMap, err := sched.Start(ctx, p.Send)
+	// Start sched collector and get the shared state
+	var sharedState *ebpfshared.SharedState
+	schedCleanup, stateInterface, err := sched.Start(ctx, p.Send)
 	if err != nil {
-		log.Fatalf("failed to start sched eBPF collector: %v", err)
+		// Send error to UI and continue without eBPF functionality
+		p.Send(uimsg.ApplicationError{
+			Message:  fmt.Sprintf("Failed to start sched eBPF collector: %v. Running without eBPF tracing.", err),
+			Severity: "warning",
+		})
+		// Continue without sched collector - application will still work for process listing
+	} else {
+		defer schedCleanup()
+		// Convert interface{} to SharedState for eBPF mode
+		if s, ok := stateInterface.(*ebpfshared.SharedState); ok {
+			sharedState = s
+		}
 	}
-	defer schedCleanup()
 
-	// Start mmap collector with shared target_pid map
-	mmapCleanup, err := mmap.Start(ctx, p.Send, targetPidMap)
-	if err != nil {
-		log.Fatalf("failed to start mmap eBPF collector: %v", err)
+	// Start mmap collector with shared state
+	if sharedState != nil {
+		mmapCleanup, err := mmap.Start(ctx, p.Send, sharedState)
+		if err != nil {
+			p.Send(uimsg.ApplicationError{
+				Message:  fmt.Sprintf("Failed to start mmap eBPF collector: %v. Memory mapping tracing disabled.", err),
+				Severity: "warning",
+			})
+		} else {
+			defer mmapCleanup()
+		}
 	}
-	defer mmapCleanup()
 
-	// Start brk collector with shared target_pid map
-	brkCleanup, err := brk.Start(ctx, p.Send, targetPidMap)
-	if err != nil {
-		log.Fatalf("failed to start brk eBPF collector: %v", err)
+	// Start brk collector with shared state
+	if sharedState != nil {
+		brkCleanup, err := brk.Start(ctx, p.Send, sharedState)
+		if err != nil {
+			p.Send(uimsg.ApplicationError{
+				Message:  fmt.Sprintf("Failed to start brk eBPF collector: %v. Heap tracing disabled.", err),
+				Severity: "warning",
+			})
+		} else {
+			defer brkCleanup()
+		}
 	}
-	defer brkCleanup()
 
-	// Start page_fault collector with shared target_pid map
-	pageFaultCleanup, err := page_fault.Start(ctx, p.Send, targetPidMap)
-	if err != nil {
-		log.Fatalf("failed to start page_fault eBPF collector: %v", err)
+	// Start page_fault collector with shared state
+	if sharedState != nil {
+		pageFaultCleanup, err := page_fault.Start(ctx, p.Send, sharedState)
+		if err != nil {
+			p.Send(uimsg.ApplicationError{
+				Message:  fmt.Sprintf("Failed to start page_fault eBPF collector: %v. Page fault tracing disabled.", err),
+				Severity: "warning",
+			})
+		} else {
+			defer pageFaultCleanup()
+		}
 	}
-	defer pageFaultCleanup()
 
-	// Start swap collector with shared target_pid map
-	swapCleanup, err := swap.Start(ctx, p.Send, targetPidMap)
-	if err != nil {
-		log.Fatalf("failed to start swap eBPF collector: %v", err)
+	// Start swap collector with shared state
+	if sharedState != nil {
+		swapCleanup, err := swap.Start(ctx, p.Send, sharedState)
+		if err != nil {
+			p.Send(uimsg.ApplicationError{
+				Message:  fmt.Sprintf("Failed to start swap eBPF collector: %v. Swap tracing disabled.", err),
+				Severity: "warning",
+			})
+		} else {
+			defer swapCleanup()
+		}
 	}
-	defer swapCleanup()
 
-	// Only sched owns the target_pid map, so we only use its setter
-	appModel.SetTargetPIDSetter(setTargetPID)
+	// Set the target PID setter in the app model if eBPF is enabled
+	if sharedState != nil {
+		appModel.SetTargetPIDSetter(sharedState.SetTargetPID)
+	}
+
+	// Set error callback for database operations
+	appModel.SetErrorCallback(func(err error) {
+		p.Send(uimsg.ApplicationError{
+			Message:  err.Error(),
+			Severity: "info",
+		})
+	})
 
 	if err := p.Start(); err != nil {
 		log.Fatalf("tui error: %v", err)
@@ -95,8 +142,8 @@ func clearDatabase(store storedb.Db[data.ProcessData]) error {
 	for _, proc := range allProcs {
 		key := fmt.Sprintf("%d", proc.Proc.PID)
 		if err := store.Delete(key); err != nil {
-			// Continue even if delete fails
-			log.Printf("failed to delete process %d: %v", proc.Proc.PID, err)
+			// Report delete failure but continue with other processes
+			fmt.Printf("Warning: failed to delete process %d from database: %v\n", proc.Proc.PID, err)
 		}
 	}
 	return nil

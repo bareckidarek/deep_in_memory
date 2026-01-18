@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"deep_in_memory/internal/constants"
 )
 
 var PageSizeBytes uint64
@@ -42,12 +44,20 @@ type PFNState struct {
 	UpdatedAt time.Time
 }
 
+// RangeCache provides fast lookup of address ranges for page faults and swap events
+type RangeCache struct {
+	Ranges     []*AddrRange // Pointers to ranges for fast iteration
+	StartVals  []uint64     // Corresponding start addresses for binary search
+	LastUpdate time.Time    // When cache was last updated
+}
+
 // ProcessData aggregates all data for a single process.
 type ProcessData struct {
-	Proc    Process
-	Virtual map[string]*VirtualPage
-	PFNs    map[string]*PFNState
-	Threads []ThreadData
+	Proc       Process
+	Virtual    map[string]*VirtualPage
+	PFNs       map[string]*PFNState
+	Threads    []ThreadData
+	rangeCache map[int]*RangeCache // TID -> RangeCache for fast lookups
 }
 
 // ThreadData stores thread-level virtual ranges.
@@ -151,11 +161,9 @@ type AddrRange struct {
 	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
 }
 
-// SortRanges sorts address ranges according to display rules:
-// 1. [heap] at top
-// 2. Ranges with empty Label, sorted by StartVal
-// 3. Ranges with non-empty Label (no file/lib references), sorted by StartVal
-// 4. Ranges with file/lib references, sorted by StartVal
+// SortRanges orders address ranges for consistent display in the UI.
+// Priority order: heap ranges first, then anonymous ranges, then labeled ranges,
+// and finally file/library-backed ranges. Within each category, ranges are sorted by address.
 func SortRanges(ranges []AddrRange) {
 	sort.SliceStable(ranges, func(i, j int) bool {
 		// Helper to check if label contains file/lib reference
@@ -204,8 +212,119 @@ type Dataset struct {
 	Order     []int
 }
 
-// AddMmapRange adds a new virtual address range for a thread based on mmap event.
-func (pd *ProcessData) AddMmapRange(tid int, addr, length uint64) {
+// invalidateRangeCache marks the range cache for a thread as stale
+func (pd *ProcessData) invalidateRangeCache(tid int) {
+	if pd.rangeCache != nil {
+		delete(pd.rangeCache, tid)
+	}
+}
+
+// getRangeCache gets or creates a range cache for a thread
+func (pd *ProcessData) getRangeCache(tid int) *RangeCache {
+	if pd.rangeCache == nil {
+		pd.rangeCache = make(map[int]*RangeCache)
+	}
+
+	cache, exists := pd.rangeCache[tid]
+	if !exists {
+		pd.rangeCache[tid] = &RangeCache{
+			LastUpdate: time.Now(),
+		}
+		return pd.rangeCache[tid]
+	}
+
+	return cache
+}
+
+// rebuildRangeCache reconstructs the internal cache for fast address range lookups.
+// Creates sorted arrays of range pointers and start addresses for binary search.
+// Called automatically when cache is stale or missing.
+func (pd *ProcessData) rebuildRangeCache(tid int) {
+	cache := pd.getRangeCache(tid)
+
+	// Find thread
+	threadIdx := -1
+	for i, th := range pd.Threads {
+		if th.TID == tid {
+			threadIdx = i
+			break
+		}
+	}
+
+	if threadIdx == -1 {
+		// Thread not found, clear cache
+		cache.Ranges = nil
+		cache.StartVals = nil
+		return
+	}
+
+	thread := pd.Threads[threadIdx]
+	cache.Ranges = make([]*AddrRange, len(thread.Ranges))
+	cache.StartVals = make([]uint64, len(thread.Ranges))
+
+	for i := range thread.Ranges {
+		cache.Ranges[i] = &thread.Ranges[i]
+		cache.StartVals[i] = thread.Ranges[i].StartVal
+	}
+
+	cache.LastUpdate = time.Now()
+}
+
+// findRangeForAddr efficiently locates the virtual address range containing a specific address.
+// Uses a cached binary search for O(log n) lookup performance, rebuilding the cache
+// if it's stale or doesn't exist. Returns nil if no range contains the address.
+func (pd *ProcessData) findRangeForAddr(tid int, addr uint64) *AddrRange {
+	cache := pd.getRangeCache(tid)
+
+	// Rebuild cache if stale or empty
+	if len(cache.Ranges) == 0 || time.Since(cache.LastUpdate) > constants.RangeCacheRefreshInterval {
+		pd.rebuildRangeCache(tid)
+		cache = pd.rangeCache[tid]
+	}
+
+	// Binary search for the correct range
+	left, right := 0, len(cache.StartVals)-1
+	for left <= right {
+		mid := left + (right-left)/2
+		if addr >= cache.StartVals[mid] {
+			if mid == len(cache.StartVals)-1 || addr < cache.StartVals[mid+1] {
+				// Found the range - check if address is within bounds
+				r := cache.Ranges[mid]
+				if addr >= r.StartVal && addr < r.EndVal {
+					return r
+				}
+				break
+			}
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+
+	// Linear search as fallback for edge cases
+	for _, r := range cache.Ranges {
+		if addr >= r.StartVal && addr < r.EndVal {
+			return r
+		}
+	}
+
+	return nil
+}
+
+// getThread gets a thread by TID
+func (pd *ProcessData) getThread(tid int) *ThreadData {
+	for i := range pd.Threads {
+		if pd.Threads[i].TID == tid {
+			return &pd.Threads[i]
+		}
+	}
+	return nil
+}
+
+// AddMmapRange records a new virtual memory allocation from an mmap syscall.
+// Creates or finds the thread's range list and adds the new address range.
+// Automatically sorts ranges after insertion for consistent ordering.
+func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
 	if pd.Threads == nil {
 		pd.Threads = []ThreadData{}
 	}
@@ -243,12 +362,16 @@ func (pd *ProcessData) AddMmapRange(tid int, addr, length uint64) {
 	pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
 	// Sort ranges after adding new one
 	SortRanges(pd.Threads[threadIdx].Ranges)
+
+	// Invalidate cache for this thread
+	pd.invalidateRangeCache(tid)
 }
 
-// ExtendBrkRange extends the heap range for a thread based on brk syscall.
-// If brk==0, ret contains the current program break (start address).
-// Otherwise, brk is the requested end address and ret is the actual end address allocated.
-func (pd *ProcessData) ExtendBrkRange(tid int, brk, ret uint64) {
+// ExtendBrkRange manages heap growth/shrinkage from brk syscalls.
+// When brk==0, ret contains current break address (query operation).
+// When brk!=0, ret is the actual allocated break address after attempted change.
+// Maintains a special [heap] range that tracks heap memory usage.
+func (pd *ProcessData) ExtendBrkRange(tid int, brk uint64, ret uint64) {
 	if pd.Threads == nil {
 		pd.Threads = []ThreadData{}
 	}
@@ -334,6 +457,11 @@ func (pd *ProcessData) ExtendBrkRange(tid int, brk, ret uint64) {
 		}
 	}
 	// If ret == heap.EndVal, no change needed
+
+	// Invalidate cache for this thread if heap was modified
+	if heapIdx != -1 {
+		pd.invalidateRangeCache(tid)
+	}
 }
 
 // AddPageFault finds the virtual address range containing the faulted address
@@ -343,33 +471,14 @@ func (pd *ProcessData) AddPageFault(tid int, faultAddr uint64) {
 		return
 	}
 
-	// Find thread
-	var threadIdx = -1
-	for i, th := range pd.Threads {
-		if th.TID == tid {
-			threadIdx = i
-			break
-		}
-	}
-
-	if threadIdx == -1 {
-		// Thread not found
-		return
-	}
-
 	// Calculate page address (align to page boundary)
 	pageAddr := (faultAddr / PageSizeBytes) * PageSizeBytes
 
-	// Find range containing faultAddr
-	for rangeIdx := range pd.Threads[threadIdx].Ranges {
-		r := &pd.Threads[threadIdx].Ranges[rangeIdx]
-		if pageAddr >= r.StartVal && pageAddr < r.EndVal {
-			// Calculate offset in pages from range start
-			pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
-			// Found the range - add page offset to INIT status
-			r.addPageToStatus(pageOffset, "INIT")
-			return
-		}
+	// Use optimized range lookup instead of O(n) linear search
+	r := pd.findRangeForAddr(tid, pageAddr)
+	if r != nil {
+		// Found the range - increment INIT count
+		r.incrementStatus("INIT")
 	}
 }
 
@@ -380,56 +489,28 @@ func (pd *ProcessData) AddSwapStatus(tid int, swapAddr uint64, isSwap bool) {
 		return
 	}
 
-	// Try to find thread by TID first
-	threadIdx := -1
-	for i, th := range pd.Threads {
-		if th.TID == tid {
-			threadIdx = i
-			break
-		}
-	}
-
-	// If not found by TID, search all threads (similar to AddPageFault)
-	if threadIdx == -1 {
-		// Try all threads
-		for i := range pd.Threads {
-			if pd.addSwapToThread(i, swapAddr, isSwap) {
-				return
+	// Use optimized range lookup instead of O(n) linear search
+	r := pd.findRangeForAddr(tid, swapAddr)
+	if r != nil {
+		// Found the range
+		if isSwap {
+			// swap_writepage: SWAP++, INIT--
+			r.incrementStatus("SWAP")
+			r.decrementStatus("INIT")
+		} else {
+			// do_swap_page: UNSWAP++, SWAP--
+			r.incrementStatus("UNSWAP")
+			r.decrementStatus("SWAP")
+			// If SWAP went to 0, also decrement INIT
+			if r.Statuses != nil && r.Statuses["SWAP"] != nil && r.Statuses["SWAP"].Count <= 0 {
+				r.decrementStatus("INIT")
 			}
 		}
-		return
 	}
-
-	// Found by TID, try to add to this thread
-	pd.addSwapToThread(threadIdx, swapAddr, isSwap)
-}
-
-func (pd *ProcessData) addSwapToThread(threadIdx int, swapAddr uint64, isSwap bool) bool {
-	// Calculate page address (align to page boundary)
-	pageAddr := (swapAddr / PageSizeBytes) * PageSizeBytes
-
-	// Find range containing swapAddr
-	for rangeIdx := range pd.Threads[threadIdx].Ranges {
-		r := &pd.Threads[threadIdx].Ranges[rangeIdx]
-		if pageAddr >= r.StartVal && pageAddr < r.EndVal {
-			// Calculate offset in pages from range start
-			pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
-			// Found the range
-			if isSwap {
-				// swap_writepage: add page offset to SWAP (removes from INIT/UNSWAP automatically)
-				r.addPageToStatus(pageOffset, "SWAP")
-			} else {
-				// do_swap_page: add page offset to UNSWAP (removes from SWAP/INIT automatically)
-				r.addPageToStatus(pageOffset, "UNSWAP")
-			}
-			return true
-		}
-	}
-	return false
 }
 
 // RemoveMmapRange removes or marks freed a virtual address range for munmap.
-func (pd *ProcessData) RemoveMmapRange(tid int, addr, length uint64) {
+func (pd *ProcessData) RemoveMmapRange(tid int, addr uint64, length uint64) {
 	if pd.Threads == nil {
 		return
 	}
@@ -453,6 +534,8 @@ func (pd *ProcessData) RemoveMmapRange(tid int, addr, length uint64) {
 			newRanges = append(newRanges, r)
 		}
 		pd.Threads[i].Ranges = newRanges
+		// Invalidate cache for this thread
+		pd.invalidateRangeCache(tid)
 		break
 	}
 }

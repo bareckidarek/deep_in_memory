@@ -11,34 +11,34 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
+	"deep_in_memory/internal/constants"
+	ebpfshared "deep_in_memory/internal/ebpf"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
 // Start attaches sched tracepoints and streams events to the provided send function.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
-// A setter is returned to update the single-element target PID map from the UI.
-// The target_pid map is also returned so it can be shared with other eBPF modules.
-func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) error, *ebpf.Map, error) {
+// Returns a SharedState for thread-safe access to target PID and cleanup function.
+func Start(ctx context.Context, send func(tea.Msg)) (func() error, interface{}, error) {
 	var objs SchedProgObjects
 	if err := LoadSchedProgObjects(&objs, nil); err != nil {
-		return nil, nil, nil, fmt.Errorf("load BPF objects: %w", err)
+		return nil, nil, fmt.Errorf("load BPF objects: %w", err)
 	}
 
 	execLink, err := link.Tracepoint("sched", "sched_process_exec", objs.HandleExec, nil)
 	if err != nil {
 		objs.Close()
-		return nil, nil, nil, fmt.Errorf("attach exec: %w", err)
+		return nil, nil, fmt.Errorf("attach exec: %w", err)
 	}
 
 	exitLink, err := link.Tracepoint("sched", "sched_process_exit", objs.HandleExit, nil)
 	if err != nil {
 		execLink.Close()
 		objs.Close()
-		return nil, nil, nil, fmt.Errorf("attach exit: %w", err)
+		return nil, nil, fmt.Errorf("attach exit: %w", err)
 	}
 
 	reader, err := ringbuf.NewReader(objs.Events)
@@ -46,17 +46,11 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 		exitLink.Close()
 		execLink.Close()
 		objs.Close()
-		return nil, nil, nil, fmt.Errorf("create ringbuf reader: %w", err)
+		return nil, nil, fmt.Errorf("create ringbuf reader: %w", err)
 	}
 
-	setTargetPID := func(pid int) error {
-		if objs.TargetPid == nil {
-			return fmt.Errorf("target_pid map not loaded")
-		}
-		key := uint32(0)
-		val := uint32(pid)
-		return objs.TargetPid.Update(&key, &val, ebpf.UpdateAny)
-	}
+	// Create shared state for thread-safe access
+	sharedState := ebpfshared.NewSharedState(objs.TargetPid)
 
 	go func() {
 		defer reader.Close()
@@ -73,7 +67,7 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 					return
 				}
 				// skip transient errors
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(constants.EbpfRetryDelay)
 				continue
 			}
 
@@ -99,7 +93,7 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, func(int) err
 		return objs.Close()
 	}
 
-	return cleanup, setTargetPID, objs.TargetPid, nil
+	return cleanup, sharedState, nil
 }
 
 func cString(b []int8) string {
