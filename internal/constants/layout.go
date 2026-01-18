@@ -61,9 +61,6 @@ const (
 
 	// Application refresh intervals
 	DefaultRefreshInterval = 1 * time.Second
-
-	// Toast notification duration
-	ToastDuration = 3 * time.Second
 )
 
 // Data processing constants
@@ -92,14 +89,6 @@ var (
 	FocusColor       = lipgloss.Color("12")  // Blue for cursor focus
 	BackgroundColor  = lipgloss.Color("236") // Dark background for focused items
 	DescriptionColor = lipgloss.Color("241") // Gray for descriptions
-
-	// Toast notification colors
-	ToastInfoColor    = lipgloss.Color("12")  // Blue for info notifications
-	ToastSuccessColor = lipgloss.Color("10")  // Green for success notifications
-	ToastWarningColor = lipgloss.Color("11")  // Yellow for warning notifications
-	ToastErrorColor   = lipgloss.Color("9")   // Red for error notifications
-	ToastBgColor      = lipgloss.Color("235") // Dark background for toast
-	ToastBorderColor  = lipgloss.Color("240") // Border color for toast
 )
 
 // Status order for rendering memory bars
