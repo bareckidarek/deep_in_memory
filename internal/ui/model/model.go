@@ -17,6 +17,9 @@ import (
 	uirender "deep_in_memory/internal/ui/render"
 )
 
+// hidePopupMsg is sent after 3 seconds to hide the welcome popup.
+type hidePopupMsg struct{}
+
 // Model wraps the Bubble Tea state for the TUI.
 type Model struct {
 	list             list.Model
@@ -30,6 +33,8 @@ type Model struct {
 	viewportPhysical viewport.Model
 	setTargetPID     func(int) error
 	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
+	showPopup        bool
+	popupShownAt     time.Time
 }
 
 // New constructs a Model from dataset.
@@ -40,6 +45,8 @@ func New(d data.Dataset) *Model {
 		focusedPID:       0,
 		viewportVirtual:  viewport.New(0, 0),
 		viewportPhysical: viewport.New(0, 0),
+		showPopup:        true,
+		popupShownAt:     time.Now(),
 	}
 
 	items := make([]list.Item, 0, len(d.Order))
@@ -74,10 +81,15 @@ func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 	m.setTargetPID = fn
 }
 
-func (m *Model) Init() tea.Cmd { return nil }
+func (m *Model) Init() tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return hidePopupMsg{} })
+}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case hidePopupMsg:
+		m.showPopup = false
+		return m, nil
 	case uimsg.ApplicationError:
 		// Set error for display in UI
 		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
@@ -195,11 +207,26 @@ func (m *Model) View() string {
 		return fmt.Sprintf("error: %v", m.err)
 	}
 
+	var view string
+	if m.showPopup {
+		popup := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("62")).
+			Bold(true).
+			Width(m.width).
+			Align(lipgloss.Center).
+			Render("Witaj w aplikacji")
+		view = popup + "\n"
+	}
+
 	left := m.list.View()
 	leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
 	right := m.renderSplitDetails()
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	mainView := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	view += mainView
+
+	return view
 }
 
 func (m *Model) renderSplitDetails() string {
