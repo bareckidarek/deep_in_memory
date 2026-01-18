@@ -207,7 +207,12 @@ func (m *Model) View() string {
 		return fmt.Sprintf("error: %v", m.err)
 	}
 
-	var view string
+	left := m.list.View()
+	leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
+	right := m.renderSplitDetails()
+
+	mainView := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+
 	if m.showPopup {
 		popup := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("15")).
@@ -216,17 +221,10 @@ func (m *Model) View() string {
 			Width(m.width).
 			Align(lipgloss.Center).
 			Render("Witaj w aplikacji")
-		view = popup + "\n"
+		return popup + "\n" + mainView
 	}
 
-	left := m.list.View()
-	leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
-	right := m.renderSplitDetails()
-
-	mainView := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
-	view += mainView
-
-	return view
+	return mainView
 }
 
 func (m *Model) renderSplitDetails() string {
