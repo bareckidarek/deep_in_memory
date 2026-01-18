@@ -213,7 +213,7 @@ func (m *Model) View() string {
 
 	mainView := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
 
-	if m.showPopup {
+	if m.showPopup && m.width > 0 {
 		popup := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("15")).
 			Background(lipgloss.Color("62")).
