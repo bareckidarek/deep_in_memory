@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/cilium/ebpf/ringbuf"
 
 	"deep_in_memory/internal/constants"

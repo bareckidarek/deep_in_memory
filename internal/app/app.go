@@ -3,7 +3,7 @@ package app
 import (
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"deep_in_memory/internal/data"
 	storedb "deep_in_memory/internal/thirdparty/db"
@@ -96,7 +96,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View delegates to the UI model.
-func (m *Model) View() string {
+func (m *Model) View() tea.View {
 	return m.ui.View()
 }
 

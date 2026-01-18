@@ -6,10 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
@@ -30,6 +31,11 @@ type Model struct {
 	viewportPhysical viewport.Model
 	setTargetPID     func(int) error
 	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
+
+	// Modal state
+	showModal    bool
+	modalType    string // info, warn, error
+	modalMessage string
 }
 
 // New constructs a Model from dataset.
@@ -38,8 +44,8 @@ func New(d data.Dataset) *Model {
 		data:             d,
 		selectedPID:      0, // No selection until user presses Enter
 		focusedPID:       0,
-		viewportVirtual:  viewport.New(0, 0),
-		viewportPhysical: viewport.New(0, 0),
+		viewportVirtual:  viewport.New(),
+		viewportPhysical: viewport.New(),
 	}
 
 	items := make([]list.Item, 0, len(d.Order))
@@ -82,7 +88,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Set error for display in UI
 		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
 		return m, nil
-	case tea.KeyMsg:
+	case uimsg.HideModalMsg:
+		m.showModal = false
+		return m, nil
+	case tea.KeyPressMsg:
 		if handler, ok := m.keyHandlers()[msg.String()]; ok {
 			return handler()
 		}
@@ -91,31 +100,36 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.list.SetSize(constants.ListWidthFallback, max(m.height-2, constants.DefaultListHeight))
 		m.syncLayout()
-	case tea.MouseMsg:
-		if msg.Type == tea.MouseWheelUp || msg.Type == tea.MouseWheelDown {
-			available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
-			_ = available
+	case tea.MouseWheelMsg:
+		available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
+		_ = available
+		m2 := msg.Mouse()
 
-			if msg.X > m.leftPaneWidth() {
-				// Route wheel to the appropriate viewport region; avoid double-handling by list.
-				var cmd tea.Cmd
-				if msg.Y <= rowHeight {
-					m.viewportVirtual, cmd = m.viewportVirtual.Update(msg)
-				} else if msg.Y <= rowHeight+secondRowHeight {
-					m.viewportPhysical, cmd = m.viewportPhysical.Update(msg)
-				}
-				return m, cmd
+		if m2.X > m.leftPaneWidth() {
+			// Route wheel to the appropriate viewport region; avoid double-handling by list.
+			var cmd tea.Cmd
+			if m2.Y <= rowHeight {
+				m.viewportVirtual, cmd = m.viewportVirtual.Update(msg)
+			} else if m2.Y <= rowHeight+secondRowHeight {
+				m.viewportPhysical, cmd = m.viewportPhysical.Update(msg)
 			}
+			return m, cmd
 		}
-		if msg.Type == tea.MouseLeft && msg.X <= m.leftPaneWidth() {
+	case tea.MouseClickMsg:
+		m2 := msg.Mouse()
+		if m2.X <= m.leftPaneWidth() {
 			const borderOffset = constants.BorderOffset
 			const paddingOffset = constants.PaddingOffset
-			adj := msg
-			adj.X = msg.X - borderOffset - paddingOffset
-			adj.Y = msg.Y - borderOffset
+			// Create a new MouseClickMsg with adjusted coordinates
+			adjusted := tea.MouseClickMsg{
+				X:      m2.X - borderOffset - paddingOffset,
+				Y:      m2.Y - borderOffset,
+				Button: m2.Button,
+				Mod:    m2.Mod,
+			}
 
 			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(adj)
+			m.list, cmd = m.list.Update(adjusted)
 			if sel, ok := m.list.SelectedItem().(listItem); ok {
 				m.focusedPID = sel.pid
 			}
@@ -190,16 +204,142 @@ func (m *Model) layoutMetrics() (available, rowHeight, secondRowHeight, barWidth
 	return
 }
 
-func (m *Model) View() string {
+func (m *Model) View() tea.View {
+	var content string
 	if m.err != nil {
-		return fmt.Sprintf("error: %v", m.err)
+		content = fmt.Sprintf("error: %v", m.err)
+	} else {
+		left := m.list.View()
+		leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
+		right := m.renderSplitDetails()
+		content = lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
 	}
 
-	left := m.list.View()
-	leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
-	right := m.renderSplitDetails()
+	// If modal is active, overlay it on top of the content
+	if m.showModal {
+		content = m.renderWithModal(content)
+	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	view := tea.NewView(content)
+	view.AltScreen = true
+	view.MouseMode = tea.MouseModeAllMotion
+	return view
+}
+
+// renderWithModal overlays a modal/notification dialog on top of the main content.
+// The modal is centered on screen and displays over the application without hiding it.
+// This is used for temporary notifications like process selections, errors, etc.
+func (m *Model) renderWithModal(baseContent string) string {
+	// Create modal box styled based on notification type
+	var bgColor string
+	switch m.modalType {
+	case constants.ModalTypeInfo:
+		bgColor = "12" // Blue
+	case constants.ModalTypeWarn:
+		bgColor = "214" // Orange
+	case constants.ModalTypeError:
+		bgColor = "9" // Red
+	default:
+		bgColor = "12" // Default to blue
+	}
+
+	// Create 3-line modal with text in the middle line
+	// Width: message + 5 columns padding on each side
+	horizontalPadding := 5
+
+	// Build modal content with 3 lines: empty, text, empty
+	textWidth := lipgloss.Width(m.modalMessage)
+	totalWidth := textWidth + (horizontalPadding * 2)
+
+	emptyLine := strings.Repeat(" ", totalWidth)
+	centeredText := strings.Repeat(" ", horizontalPadding) + m.modalMessage + strings.Repeat(" ", horizontalPadding)
+
+	modalLines := []string{
+		emptyLine,
+		centeredText,
+		emptyLine,
+	}
+
+	// Apply styling to each line with black foreground
+	modalStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(bgColor)).
+		Foreground(lipgloss.Color("#000000")). // Black text (hex code)
+		Bold(true)
+
+	var styledLines []string
+	for _, line := range modalLines {
+		styledLines = append(styledLines, modalStyle.Render(line))
+	}
+
+	modalHeight := len(styledLines)
+	modalWidth := lipgloss.Width(styledLines[0])
+
+	// Split base content into lines
+	baseLines := strings.Split(baseContent, "\n")
+	if len(baseLines) > m.height {
+		baseLines = baseLines[:m.height]
+	}
+
+	// Calculate modal position (2 lines from top)
+	modalY := constants.ModalTopOffset
+	if modalY < 0 {
+		modalY = 0
+	}
+
+	modalX := (m.width - modalWidth) / 2
+	if modalX < 0 {
+		modalX = 0
+	}
+
+	// Build output line by line, overlaying modal preserving ANSI codes
+	var outputLines []string
+
+	for i := 0; i < m.height; i++ {
+		var baseLine string
+		if i < len(baseLines) {
+			baseLine = baseLines[i]
+		} else {
+			baseLine = strings.Repeat(" ", m.width)
+		}
+
+		// Ensure base line has proper width (handle ANSI codes)
+		visualWidth := ansi.StringWidth(baseLine)
+		if visualWidth < m.width {
+			baseLine += strings.Repeat(" ", m.width-visualWidth)
+		}
+
+		// Check if this line intersects with modal
+		if i >= modalY && i < modalY+modalHeight {
+			modalLineIdx := i - modalY
+			modalLine := styledLines[modalLineIdx]
+			modalLineWidth := lipgloss.Width(modalLine)
+
+			// Extract left part (before modal) - use Truncate to keep ANSI codes
+			leftPart := ""
+			if modalX > 0 {
+				leftPart = ansi.Truncate(baseLine, modalX, "")
+			}
+
+			// Extract right part (after modal) - need to skip first (modalX + modalLineWidth) characters
+			rightPart := ""
+			skipChars := modalX + modalLineWidth
+			if skipChars < visualWidth {
+				// We need everything after skipChars position
+				// Truncate from left by removing first skipChars characters
+				fullWidth := ansi.StringWidth(baseLine)
+				charsToKeep := fullWidth - skipChars
+				if charsToKeep > 0 {
+					rightPart = ansi.TruncateLeft(baseLine, skipChars, "")
+				}
+			}
+
+			outputLines = append(outputLines, leftPart+modalLine+rightPart)
+		} else {
+			outputLines = append(outputLines, baseLine)
+		}
+	}
+
+	return strings.Join(outputLines, "\n")
 }
 
 func (m *Model) renderSplitDetails() string {
@@ -394,10 +534,10 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 		physicalHeight = constants.MinViewportHeight
 	}
 
-	m.viewportVirtual.Width = virtualWidth
-	m.viewportVirtual.Height = virtualHeight
-	m.viewportPhysical.Width = physicalWidth
-	m.viewportPhysical.Height = physicalHeight
+	m.viewportVirtual.SetWidth(virtualWidth)
+	m.viewportVirtual.SetHeight(virtualHeight)
+	m.viewportPhysical.SetWidth(physicalWidth)
+	m.viewportPhysical.SetHeight(physicalHeight)
 
 	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth, m.rangesPage, virtualWidth))
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(pd))
@@ -483,8 +623,8 @@ func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCo
 // Supports navigation (arrows), selection (Enter), pagination (n/p), and quitting (q/Ctrl+C).
 func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 	return map[string]func() (tea.Model, tea.Cmd){
-		"q":      func() (tea.Model, tea.Cmd) { return m, tea.Quit },
-		"ctrl+c": func() (tea.Model, tea.Cmd) { return m, tea.Quit },
+		"q":      func() (tea.Model, tea.Cmd) { return m, func() tea.Msg { return tea.Quit() } },
+		"ctrl+c": func() (tea.Model, tea.Cmd) { return m, func() tea.Msg { return tea.Quit() } },
 		"enter": func() (tea.Model, tea.Cmd) {
 			if sel, ok := m.list.SelectedItem().(listItem); ok {
 				// Enter selects the focused process
@@ -497,10 +637,20 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 				}
 				m.syncLayout()
 
-				// Send message to load smaps for this process
-				return m, func() tea.Msg {
-					return uimsg.LoadSmapsRequest{PID: sel.pid}
-				}
+				// Show modal with info notification
+				m.showModal = true
+				m.modalType = constants.ModalTypeInfo
+				m.modalMessage = fmt.Sprintf("Selected process %d", sel.pid)
+
+				// Send message to load smaps for this process and hide modal after configured duration
+				return m, tea.Batch(
+					func() tea.Msg {
+						return uimsg.LoadSmapsRequest{PID: sel.pid}
+					},
+					tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
+						return uimsg.HideModalMsg{}
+					}),
+				)
 			}
 			return m, nil
 		},

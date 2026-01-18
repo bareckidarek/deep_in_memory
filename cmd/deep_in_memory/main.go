@@ -9,7 +9,7 @@ import (
 
 	"deep_in_memory/internal/app"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
@@ -44,7 +44,7 @@ func main() {
 	}
 	initial := data.BuildDataset(initialProcs)
 	appModel := app.New(store, initial, constants.DefaultRefreshInterval)
-	p := tea.NewProgram(appModel, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	p := tea.NewProgram(appModel)
 
 	// Start sched collector and get the shared state
 	var sharedState *ebpfshared.SharedState
@@ -129,7 +129,7 @@ func main() {
 		})
 	})
 
-	if err := p.Start(); err != nil {
+	if _, err := p.Run(); err != nil {
 		log.Fatalf("tui error: %v", err)
 	}
 }

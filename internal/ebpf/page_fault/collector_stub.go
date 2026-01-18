@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Start is a stub for when eBPF is not enabled. Returns an error indicating no support.

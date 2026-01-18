@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Start is a stub when eBPF build tag is not enabled or eBPF assets are missing.

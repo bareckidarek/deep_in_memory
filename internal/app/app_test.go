@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -325,8 +326,12 @@ func TestView(t *testing.T) {
 
 	view := model.View()
 
-	assert.NotEmpty(t, view)
-	assert.Contains(t, view, "Processes")
+	// View() returns tea.View, convert to string
+	if canvas, ok := view.Content.(*lipgloss.Canvas); ok {
+		viewStr := canvas.Render()
+		assert.NotEmpty(t, viewStr)
+		assert.Contains(t, viewStr, "Processes")
+	}
 }
 
 func TestReload_Success(t *testing.T) {
