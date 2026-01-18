@@ -79,3 +79,6 @@ type ApplicationError struct {
 	Message  string
 	Severity string // "warning", "error", "info"
 }
+
+// HideModalMsg is sent after the modal timeout to hide the modal.
+type HideModalMsg struct{}

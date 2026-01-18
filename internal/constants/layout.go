@@ -3,7 +3,7 @@ package constants
 import (
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // Layout constants for the terminal UI
@@ -61,6 +61,21 @@ const (
 
 	// Application refresh intervals
 	DefaultRefreshInterval = 1 * time.Second
+
+	// Modal notification timeout
+	ModalDisplayDuration = 3 * time.Second
+)
+
+// Modal notification types
+const (
+	ModalTypeInfo  = "info"
+	ModalTypeWarn  = "warn"
+	ModalTypeError = "error"
+)
+
+// Modal position constants
+const (
+	ModalTopOffset = 2 // Lines from top of screen
 )
 
 // Data processing constants

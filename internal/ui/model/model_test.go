@@ -1,13 +1,16 @@
 package model
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
@@ -91,7 +94,7 @@ func TestUpdate_KeyMsgQuit(t *testing.T) {
 	dataset := data.BuildDataset(processes)
 	model := New(dataset)
 
-	newModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	newModel, cmd := model.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 
 	assert.NotNil(t, newModel)
 	assert.NotNil(t, cmd)
@@ -104,7 +107,7 @@ func TestUpdate_KeyMsgCtrlC(t *testing.T) {
 	dataset := data.BuildDataset(processes)
 	model := New(dataset)
 
-	newModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	newModel, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 
 	assert.NotNil(t, newModel)
 	assert.NotNil(t, cmd)
@@ -125,7 +128,7 @@ func TestUpdate_KeyMsgEnter(t *testing.T) {
 		return nil
 	}
 
-	newModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newModel, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	assert.NotNil(t, newModel)
 	assert.NotNil(t, cmd)
@@ -142,7 +145,7 @@ func TestUpdate_KeyMsgNextPage(t *testing.T) {
 	model.selectedPID = 1001
 	model.rangesPage = 0
 
-	newModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	newModel, cmd := model.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 
 	assert.NotNil(t, newModel)
 	assert.Nil(t, cmd)
@@ -158,7 +161,7 @@ func TestUpdate_KeyMsgPrevPage(t *testing.T) {
 	model.selectedPID = 1001
 	model.rangesPage = 2
 
-	newModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	newModel, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 
 	assert.NotNil(t, newModel)
 	assert.Nil(t, cmd)
@@ -174,7 +177,7 @@ func TestUpdate_KeyMsgPrevPageAtZero(t *testing.T) {
 	model.selectedPID = 1001
 	model.rangesPage = 0
 
-	newModel, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	newModel, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 
 	assert.NotNil(t, newModel)
 	assert.Nil(t, cmd)
@@ -206,7 +209,7 @@ func TestUpdate_MouseMsgWheel(t *testing.T) {
 	model.width = 100
 	model.height = 50
 
-	newModel, _ := model.Update(tea.MouseMsg{Type: tea.MouseWheelDown, X: 50, Y: 10})
+	newModel, _ := model.Update(tea.MouseWheelMsg{X: 50, Y: 10, Button: tea.MouseWheelDown})
 
 	assert.NotNil(t, newModel)
 }
@@ -220,10 +223,13 @@ func TestView(t *testing.T) {
 
 	view := model.View()
 
-	assert.NotEmpty(t, view)
-	assert.Contains(t, view, "Processes")
+	// View() returns tea.View, extract string content
+	if canvas, ok := view.Content.(*lipgloss.Canvas); ok {
+		viewStr := canvas.Render()
+		assert.NotEmpty(t, viewStr)
+		assert.Contains(t, viewStr, "Processes")
+	}
 }
-
 func TestCurrentProcessData(t *testing.T) {
 	now := time.Now()
 	processes := []data.ProcessData{
@@ -359,4 +365,41 @@ func TestSyncLayout_WithSelection(t *testing.T) {
 	model.syncLayout()
 
 	assert.NotEmpty(t, model.viewportVirtual.View())
+}
+
+func TestModal_ShowsOnEnter(t *testing.T) {
+	processes := []data.ProcessData{
+		{Proc: data.Process{PID: 1001, Name: "proc1", StartTime: time.Now()}},
+	}
+	dataset := data.BuildDataset(processes)
+	model := New(dataset)
+	model.width = 100
+	model.height = 30
+
+	// Press Enter to select process
+	newModel, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	assert.NotNil(t, newModel)
+	assert.NotNil(t, cmd)
+	assert.True(t, model.showModal)
+	expectedMsg := fmt.Sprintf("Selected process %d", 1001)
+	assert.Equal(t, expectedMsg, model.modalMessage)
+	assert.Equal(t, constants.ModalTypeInfo, model.modalType)
+}
+
+func TestModal_HidesOnTimeout(t *testing.T) {
+	processes := []data.ProcessData{
+		{Proc: data.Process{PID: 1001, Name: "proc1", StartTime: time.Now()}},
+	}
+	dataset := data.BuildDataset(processes)
+	model := New(dataset)
+	model.showModal = true
+	model.modalMessage = "Test message"
+
+	// Send HideModalMsg
+	newModel, cmd := model.Update(uimsg.HideModalMsg{})
+
+	assert.NotNil(t, newModel)
+	assert.Nil(t, cmd)
+	assert.False(t, model.showModal)
 }
