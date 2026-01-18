@@ -15,6 +15,7 @@ import (
 	"deep_in_memory/internal/data"
 	uimsg "deep_in_memory/internal/ui/msg"
 	uirender "deep_in_memory/internal/ui/render"
+	"deep_in_memory/internal/ui/toast"
 )
 
 // Model wraps the Bubble Tea state for the TUI.
@@ -29,7 +30,8 @@ type Model struct {
 	viewportVirtual  viewport.Model
 	viewportPhysical viewport.Model
 	setTargetPID     func(int) error
-	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
+	rangesPage       int          // Current page for virtual ranges pagination (0-indexed)
+	currentToast     *toast.Toast // Current toast notification
 }
 
 // New constructs a Model from dataset.
@@ -81,6 +83,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case uimsg.ApplicationError:
 		// Set error for display in UI
 		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
+		return m, nil
+	case toast.ToastExpiredMsg:
+		// Hide expired toast
+		if m.currentToast != nil {
+			m.currentToast.Hide()
+		}
 		return m, nil
 	case tea.KeyMsg:
 		if handler, ok := m.keyHandlers()[msg.String()]; ok {
@@ -199,7 +207,19 @@ func (m *Model) View() string {
 	leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
 	right := m.renderSplitDetails()
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	content := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+
+	// Add toast overlay if visible
+	if m.currentToast != nil && m.currentToast.Visible {
+		toastView := m.currentToast.Render(m.width)
+		if toastView != "" {
+			// Position toast at the top of the screen
+			content = lipgloss.PlaceVertical(m.height, lipgloss.Top, toastView)
+			content = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, content)
+		}
+	}
+
+	return content
 }
 
 func (m *Model) renderSplitDetails() string {
@@ -334,6 +354,12 @@ func (m *Model) applySelection(pid int, pushToEBPF bool) {
 		}
 	}
 	m.syncLayout()
+}
+
+// showToast displays a toast notification with the given message and type
+func (m *Model) showToast(message string, toastType toast.ToastType) tea.Cmd {
+	m.currentToast = toast.NewToast(message, toastType)
+	return toast.StartToastTimer(m.currentToast)
 }
 
 // ensureSelection maintains the current process selection if the process still exists,
@@ -497,10 +523,15 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 				}
 				m.syncLayout()
 
+				// Show toast notification for process selection
+				toastCmd := m.showToast(fmt.Sprintf("Wybrano proces %d", sel.pid), toast.ToastTypeSuccess)
+
 				// Send message to load smaps for this process
-				return m, func() tea.Msg {
+				smapsCmd := func() tea.Msg {
 					return uimsg.LoadSmapsRequest{PID: sel.pid}
 				}
+
+				return m, tea.Batch(toastCmd, smapsCmd)
 			}
 			return m, nil
 		},
