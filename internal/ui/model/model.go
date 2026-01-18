@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"io"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -259,6 +260,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case uimsg.FlushEventLog:
 		// Flush accumulated event logs to display
+		log.Printf("flush event log")
 		beforeCount := len(m.eventLogger.logLines)
 		m.eventLogger.FlushLog()
 		afterCount := len(m.eventLogger.logLines)
