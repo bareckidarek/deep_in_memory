@@ -207,19 +207,23 @@ func (m *Model) View() string {
 	leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
 	right := m.renderSplitDetails()
 
-	content := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
 
-	// Add toast overlay if visible
+	// If there's an active toast, overlay it on top of the main content
 	if m.currentToast != nil && m.currentToast.Visible {
 		toastView := m.currentToast.Render(m.width)
 		if toastView != "" {
-			// Position toast at the top of the screen
-			content = lipgloss.PlaceVertical(m.height, lipgloss.Top, toastView)
-			content = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, content)
+			// Create overlay with toast at the top, main content below
+			overlay := lipgloss.JoinVertical(
+				lipgloss.Top,
+				toastView,
+				mainContent,
+			)
+			return overlay
 		}
 	}
 
-	return content
+	return mainContent
 }
 
 func (m *Model) renderSplitDetails() string {
