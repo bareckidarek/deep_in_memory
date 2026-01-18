@@ -3,9 +3,7 @@ package model
 import (
 	"fmt"
 	"io"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -19,18 +17,11 @@ import (
 	uirender "deep_in_memory/internal/ui/render"
 )
 
-// EventCounter tracks counts and addresses for a specific event type
-type EventCounter struct {
-	Count     int
-	Addresses map[uint64]bool // Set of addresses for range merging
-}
-
-// EventLogger manages periodic logging of eBPF events
-type EventLogger struct {
-	mu            sync.RWMutex
-	lastLogTime   time.Time
-	eventCounters map[string]*EventCounter // key: event type (mmap, munmap, etc.)
-	logLines      []string                 // Recent log entries for display
+// Notification represents a temporary message shown at the top of the screen
+type Notification struct {
+	Message   string
+	Severity  string // "info", "warning", "error", "success"
+	ShowUntil time.Time
 }
 
 // Model wraps the Bubble Tea state for the TUI.
@@ -45,156 +36,48 @@ type Model struct {
 	viewportVirtual  viewport.Model
 	viewportPhysical viewport.Model
 	viewportLog      viewport.Model
-	eventLogger      *EventLogger
 	setTargetPID     func(int) error
-	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
+	rangesPage       int           // Current page for virtual ranges pagination (0-indexed)
+	notification     *Notification // Current notification to display
 }
 
-// RecordEvent records an eBPF event in the event logger
-func (m *Model) RecordEvent(eventType string, address uint64) {
-	m.eventLogger.RecordEvent(eventType, address)
+// ShowNotification displays a temporary notification at the top of the screen
+func (m *Model) ShowNotification(message, severity string, duration time.Duration) {
+	m.notification = &Notification{
+		Message:   message,
+		Severity:  severity,
+		ShowUntil: time.Now().Add(duration),
+	}
+}
+
+// HideNotification clears the current notification
+func (m *Model) HideNotification() {
+	m.notification = nil
+}
+
+// getNotificationColor returns the appropriate color for notification severity
+func (m *Model) getNotificationColor() string {
+	if m.notification == nil {
+		return "#ffffff"
+	}
+
+	switch m.notification.Severity {
+	case "error":
+		return "#ff5f5f" // Red
+	case "warning":
+		return "#ffaf5f" // Orange
+	case "success":
+		return "#5fff5f" // Green
+	case "info":
+		return "#5f87ff" // Blue
+	default:
+		return "#5f87ff" // Default blue
+	}
 }
 
 // FlushEventLogs flushes accumulated event logs and updates the display
 func (m *Model) FlushEventLogs() {
-	m.eventLogger.FlushLog()
-	m.updateLogViewport()
-}
-
-// NewEventLogger creates a new event logger instance
-func NewEventLogger() *EventLogger {
-	return &EventLogger{
-		eventCounters: make(map[string]*EventCounter),
-		logLines:      make([]string, 0),
-	}
-}
-
-// RecordEvent records an eBPF event for later logging
-func (el *EventLogger) RecordEvent(eventType string, address uint64) {
-	el.mu.Lock()
-	defer el.mu.Unlock()
-
-	if el.eventCounters[eventType] == nil {
-		el.eventCounters[eventType] = &EventCounter{
-			Count:     0,
-			Addresses: make(map[uint64]bool),
-		}
-	}
-
-	counter := el.eventCounters[eventType]
-	counter.Count++
-	if address != 0 {
-		counter.Addresses[address] = true
-	}
-}
-
-// FlushLog generates and stores a log entry if enough time has passed
-func (el *EventLogger) FlushLog() {
-	el.mu.Lock()
-	defer el.mu.Unlock()
-
-	now := time.Now()
-	if now.Sub(el.lastLogTime) < constants.EventLogIntervalSeconds*time.Second {
-		return
-	}
-
-	if len(el.eventCounters) == 0 {
-		return
-	}
-
-	var logEntries []string
-	for eventType, counter := range el.eventCounters {
-		if counter.Count == 0 {
-			continue
-		}
-
-		// Generate address ranges
-		var ranges []string
-		if len(counter.Addresses) > 0 {
-			ranges = el.generateAddressRanges(counter.Addresses)
-		}
-
-		// Create log entry
-		entry := fmt.Sprintf("%s: %d events", eventType, counter.Count)
-		if len(ranges) > 0 {
-			entry += fmt.Sprintf(" at %s", strings.Join(ranges, ", "))
-		}
-		logEntries = append(logEntries, entry)
-	}
-
-	if len(logEntries) > 0 {
-		timestamp := now.Format("15:04:05")
-		logLine := fmt.Sprintf("[%s] %s", timestamp, strings.Join(logEntries, "; "))
-		el.logLines = append(el.logLines, logLine)
-
-		// Keep only last 50 log lines
-		if len(el.logLines) > 50 {
-			el.logLines = el.logLines[len(el.logLines)-50:]
-		}
-	}
-
-	// Reset counters and update timestamp
-	el.eventCounters = make(map[string]*EventCounter)
-	el.lastLogTime = now
-}
-
-// generateAddressRanges converts a set of addresses into merged ranges
-func (el *EventLogger) generateAddressRanges(addresses map[uint64]bool) []string {
-	if len(addresses) == 0 {
-		return nil
-	}
-
-	// Convert map to sorted slice
-	var addrList []uint64
-	for addr := range addresses {
-		addrList = append(addrList, addr)
-	}
-	sort.Slice(addrList, func(i, j int) bool {
-		return addrList[i] < addrList[j]
-	})
-
-	// Merge consecutive addresses into ranges
-	var ranges []string
-	start := addrList[0]
-	end := addrList[0]
-
-	for i := 1; i < len(addrList); i++ {
-		if addrList[i] == end+data.PageSizeBytes {
-			// Consecutive address
-			end = addrList[i]
-		} else {
-			// Gap found, add current range
-			ranges = append(ranges, el.formatAddressRange(start, end))
-			start = addrList[i]
-			end = addrList[i]
-		}
-	}
-
-	// Add final range
-	ranges = append(ranges, el.formatAddressRange(start, end))
-
-	return ranges
-}
-
-// formatAddressRange formats a start-end address range as hex
-func (el *EventLogger) formatAddressRange(start, end uint64) string {
-	if start == end {
-		return fmt.Sprintf("0x%x", start)
-	}
-	return fmt.Sprintf("0x%x-0x%x", start, end)
-}
-
-// GetLogContent returns formatted log content for display
-func (el *EventLogger) GetLogContent() string {
-	el.mu.RLock()
-	defer el.mu.RUnlock()
-
-	if len(el.logLines) == 0 {
-		return "EVENT LOG\nNo events recorded yet\nWaiting for eBPF events..."
-	}
-
-	return "Event log (last " + fmt.Sprintf("%d", len(el.logLines)) + " entries):\n" +
-		strings.Join(el.logLines, "\n")
+	// Event logging was removed, this is a no-op now
 }
 
 // New constructs a Model from dataset.
@@ -206,7 +89,6 @@ func New(d data.Dataset) *Model {
 		viewportVirtual:  viewport.New(0, 0),
 		viewportPhysical: viewport.New(0, 0),
 		viewportLog:      viewport.New(0, 0),
-		eventLogger:      NewEventLogger(),
 	}
 
 	items := make([]list.Item, 0, len(d.Order))
@@ -252,8 +134,14 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case uimsg.ApplicationError:
-		// Set error for display in UI
-		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
+		// Show notification instead of setting persistent error
+		m.ShowNotification(msg.Message, msg.Severity, 3*time.Second)
+		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return uimsg.HideNotification{}
+		})
+	case uimsg.HideNotification:
+		// Hide the current notification
+		m.HideNotification()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -372,11 +260,36 @@ func (m *Model) View() string {
 		return fmt.Sprintf("error: %v", m.err)
 	}
 
+	// Check if notification should be hidden
+	if m.notification != nil && time.Now().After(m.notification.ShowUntil) {
+		m.HideNotification()
+	}
+
+	var content string
+
+	// Render notification if present
+	if m.notification != nil {
+		notificationStyle := lipgloss.NewStyle().
+			Background(lipgloss.Color(m.getNotificationColor())).
+			Foreground(lipgloss.Color("#000000")).
+			Bold(true).
+			Width(m.width).
+			Align(lipgloss.Center).
+			Padding(0, 2)
+
+		notificationText := m.notification.Message
+		content += notificationStyle.Render(notificationText) + "\n"
+	}
+
+	// Main content
 	left := m.list.View()
 	leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
 	right := m.renderSplitDetails()
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	content += mainContent
+
+	return content
 }
 
 func (m *Model) renderSplitDetails() string {
@@ -394,12 +307,8 @@ func (m *Model) renderSplitDetails() string {
 
 	physicalLeft := box.Width(physicalWidth).Height(secondRowHeight).Render(m.viewportPhysical.View())
 
-	// Ensure log viewport is updated before rendering
-	m.updateLogViewport()
-	logContent := m.viewportLog.View()
-	if logContent == "" {
-		logContent = "[LOG WINDOW]\nEmpty log"
-	}
+	// Log viewport is no longer used, show placeholder
+	logContent := "[LOG WINDOW]\nEvent logging removed\nThis space is reserved\nfor future features"
 	physicalRight := box.Width(available - physicalWidth - 1).Height(secondRowHeight).Render(logContent)
 
 	// Join left and right physical sections horizontally
@@ -563,7 +472,7 @@ func (m *Model) currentProcessData() (*data.ProcessData, bool) {
 	return pd, ok
 }
 
-// updateLogViewport updates the log viewport with current event log content
+// updateLogViewport updates the log viewport (placeholder for future features)
 func (m *Model) updateLogViewport() {
 	available, _, secondRowHeight, _ := m.layoutMetrics()
 	logWidth := (available - 1) / 2
@@ -577,7 +486,7 @@ func (m *Model) updateLogViewport() {
 		m.viewportLog.Height = 3
 	}
 
-	m.viewportLog.SetContent(m.eventLogger.GetLogContent())
+	m.viewportLog.SetContent("[LOG WINDOW]\nEvent logging removed\nThis space is reserved\nfor future features")
 }
 
 // updateViewports calculates viewport dimensions and renders content for both the virtual
@@ -704,6 +613,10 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 				// Enter selects the focused process
 				m.selectedPID = sel.pid
 				m.rangesPage = 0 // Reset to first page when selecting new process
+
+				// Show notification about process selection
+				m.ShowNotification(fmt.Sprintf("Selected process %d (%s)", sel.pid, sel.title), "info", 3*time.Second)
+
 				if m.setTargetPID != nil {
 					if err := m.setTargetPID(sel.pid); err != nil {
 						m.err = err

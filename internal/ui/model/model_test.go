@@ -361,12 +361,51 @@ func TestSyncLayout_WithSelection(t *testing.T) {
 	assert.NotEmpty(t, model.viewportVirtual.View())
 	assert.NotEmpty(t, model.viewportLog.View())
 	assert.Contains(t, model.viewportLog.View(), "EVENT LOG")
+}
 
-	// Test event recording
-	model.RecordEvent("test_event", 0x1000)
-	model.eventLogger.FlushLog()
-	model.updateLogViewport()
+func TestNotificationSystem(t *testing.T) {
+	processes := []data.ProcessData{
+		{Proc: data.Process{PID: 1001, Name: "proc1", StartTime: time.Now()}},
+	}
+	dataset := data.BuildDataset(processes)
+	model := New(dataset)
 
-	logContent := model.viewportLog.View()
-	assert.Contains(t, logContent, "EVENT LOG")
+	// Test showing notification
+	model.ShowNotification("Test message", "info", 1*time.Second)
+	assert.NotNil(t, model.notification)
+	assert.Equal(t, "Test message", model.notification.Message)
+	assert.Equal(t, "info", model.notification.Severity)
+
+	// Test notification appears in View
+	view := model.View()
+	assert.Contains(t, view, "Test message")
+
+	// Test hiding notification
+	model.HideNotification()
+	assert.Nil(t, model.notification)
+}
+
+func TestNotificationColors(t *testing.T) {
+	processes := []data.ProcessData{
+		{Proc: data.Process{PID: 1001, Name: "proc1", StartTime: time.Now()}},
+	}
+	dataset := data.BuildDataset(processes)
+	model := New(dataset)
+
+	testCases := []struct {
+		severity string
+		expected string
+	}{
+		{"error", "#ff5f5f"},
+		{"warning", "#ffaf5f"},
+		{"success", "#5fff5f"},
+		{"info", "#5f87ff"},
+		{"unknown", "#5f87ff"},
+	}
+
+	for _, tc := range testCases {
+		model.ShowNotification("test", tc.severity, 1*time.Second)
+		color := model.getNotificationColor()
+		assert.Equal(t, tc.expected, color, "Wrong color for severity: %s", tc.severity)
+	}
 }

@@ -82,3 +82,6 @@ type ApplicationError struct {
 
 // FlushEventLog is sent periodically to flush accumulated eBPF event logs to the UI
 type FlushEventLog struct{}
+
+// HideNotification is sent to hide the current notification
+type HideNotification struct{}

@@ -69,27 +69,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case uimsg.ProcessMmap:
 		m.dbHelper.HandleMmapEvent(v)
-		m.ui.RecordEvent("mmap", v.Addr)
 		return m, nil
 	case uimsg.ProcessMunmap:
 		m.dbHelper.HandleMunmapEvent(v)
-		m.ui.RecordEvent("munmap", v.Addr)
 		return m, nil
 	case uimsg.ProcessBrk:
 		m.dbHelper.HandleBrkEvent(v)
-		m.ui.RecordEvent("brk", v.Ret)
 		return m, nil
 	case uimsg.ProcessPageFault:
 		m.dbHelper.HandlePageFaultEvent(v)
-		m.ui.RecordEvent("page_fault", v.Address)
 		return m, nil
 	case uimsg.ProcessSwapUnswap:
 		m.dbHelper.HandleSwapEvent(v)
-		eventType := "swap_out"
-		if v.IsSwap {
-			eventType = "swap_in"
-		}
-		m.ui.RecordEvent(eventType, v.Address)
 		return m, nil
 	case uimsg.FlushEventLog:
 		// Flush event logs in UI model
