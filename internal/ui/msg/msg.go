@@ -79,3 +79,6 @@ type ApplicationError struct {
 	Message  string
 	Severity string // "warning", "error", "info"
 }
+
+// FlushEventLog is sent periodically to flush accumulated eBPF event logs to the UI
+type FlushEventLog struct{}

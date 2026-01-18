@@ -81,7 +81,7 @@ func TestInit(t *testing.T) {
 
 	cmd := model.Init()
 
-	assert.Nil(t, cmd)
+	assert.NotNil(t, cmd) // Should return timer command for event logging
 }
 
 func TestUpdate_KeyMsgQuit(t *testing.T) {

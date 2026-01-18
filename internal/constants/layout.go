@@ -76,6 +76,12 @@ const (
 	PaddingOffset = 1
 )
 
+// Logging constants
+const (
+	// Event logging interval in seconds
+	EventLogIntervalSeconds = 20
+)
+
 // Color constants for memory status visualization
 var (
 	// Memory status colors

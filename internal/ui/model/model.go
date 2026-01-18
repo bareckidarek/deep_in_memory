@@ -3,7 +3,9 @@ package model
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -17,6 +19,20 @@ import (
 	uirender "deep_in_memory/internal/ui/render"
 )
 
+// EventCounter tracks counts and addresses for a specific event type
+type EventCounter struct {
+	Count     int
+	Addresses map[uint64]bool // Set of addresses for range merging
+}
+
+// EventLogger manages periodic logging of eBPF events
+type EventLogger struct {
+	mu            sync.RWMutex
+	lastLogTime   time.Time
+	eventCounters map[string]*EventCounter // key: event type (mmap, munmap, etc.)
+	logLines      []string                 // Recent log entries for display
+}
+
 // Model wraps the Bubble Tea state for the TUI.
 type Model struct {
 	list             list.Model
@@ -28,8 +44,151 @@ type Model struct {
 	err              error
 	viewportVirtual  viewport.Model
 	viewportPhysical viewport.Model
+	viewportLog      viewport.Model
+	eventLogger      *EventLogger
 	setTargetPID     func(int) error
 	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
+}
+
+// RecordEvent records an eBPF event in the event logger
+func (m *Model) RecordEvent(eventType string, address uint64) {
+	m.eventLogger.RecordEvent(eventType, address)
+}
+
+// NewEventLogger creates a new event logger instance
+func NewEventLogger() *EventLogger {
+	return &EventLogger{
+		eventCounters: make(map[string]*EventCounter),
+		logLines:      make([]string, 0),
+	}
+}
+
+// RecordEvent records an eBPF event for later logging
+func (el *EventLogger) RecordEvent(eventType string, address uint64) {
+	el.mu.Lock()
+	defer el.mu.Unlock()
+
+	if el.eventCounters[eventType] == nil {
+		el.eventCounters[eventType] = &EventCounter{
+			Count:     0,
+			Addresses: make(map[uint64]bool),
+		}
+	}
+
+	counter := el.eventCounters[eventType]
+	counter.Count++
+	if address != 0 {
+		counter.Addresses[address] = true
+	}
+}
+
+// FlushLog generates and stores a log entry if enough time has passed
+func (el *EventLogger) FlushLog() {
+	el.mu.Lock()
+	defer el.mu.Unlock()
+
+	now := time.Now()
+	if now.Sub(el.lastLogTime) < constants.EventLogIntervalSeconds*time.Second {
+		return
+	}
+
+	if len(el.eventCounters) == 0 {
+		return
+	}
+
+	var logEntries []string
+	for eventType, counter := range el.eventCounters {
+		if counter.Count == 0 {
+			continue
+		}
+
+		// Generate address ranges
+		var ranges []string
+		if len(counter.Addresses) > 0 {
+			ranges = el.generateAddressRanges(counter.Addresses)
+		}
+
+		// Create log entry
+		entry := fmt.Sprintf("%s: %d events", eventType, counter.Count)
+		if len(ranges) > 0 {
+			entry += fmt.Sprintf(" at %s", strings.Join(ranges, ", "))
+		}
+		logEntries = append(logEntries, entry)
+	}
+
+	if len(logEntries) > 0 {
+		timestamp := now.Format("15:04:05")
+		logLine := fmt.Sprintf("[%s] %s", timestamp, strings.Join(logEntries, "; "))
+		el.logLines = append(el.logLines, logLine)
+
+		// Keep only last 50 log lines
+		if len(el.logLines) > 50 {
+			el.logLines = el.logLines[len(el.logLines)-50:]
+		}
+	}
+
+	// Reset counters and update timestamp
+	el.eventCounters = make(map[string]*EventCounter)
+	el.lastLogTime = now
+}
+
+// generateAddressRanges converts a set of addresses into merged ranges
+func (el *EventLogger) generateAddressRanges(addresses map[uint64]bool) []string {
+	if len(addresses) == 0 {
+		return nil
+	}
+
+	// Convert map to sorted slice
+	var addrList []uint64
+	for addr := range addresses {
+		addrList = append(addrList, addr)
+	}
+	sort.Slice(addrList, func(i, j int) bool {
+		return addrList[i] < addrList[j]
+	})
+
+	// Merge consecutive addresses into ranges
+	var ranges []string
+	start := addrList[0]
+	end := addrList[0]
+
+	for i := 1; i < len(addrList); i++ {
+		if addrList[i] == end+data.PageSizeBytes {
+			// Consecutive address
+			end = addrList[i]
+		} else {
+			// Gap found, add current range
+			ranges = append(ranges, el.formatAddressRange(start, end))
+			start = addrList[i]
+			end = addrList[i]
+		}
+	}
+
+	// Add final range
+	ranges = append(ranges, el.formatAddressRange(start, end))
+
+	return ranges
+}
+
+// formatAddressRange formats a start-end address range as hex
+func (el *EventLogger) formatAddressRange(start, end uint64) string {
+	if start == end {
+		return fmt.Sprintf("0x%x", start)
+	}
+	return fmt.Sprintf("0x%x-0x%x", start, end)
+}
+
+// GetLogContent returns formatted log content for display
+func (el *EventLogger) GetLogContent() string {
+	el.mu.RLock()
+	defer el.mu.RUnlock()
+
+	if len(el.logLines) == 0 {
+		return "Event log: no events recorded yet\nWaiting for eBPF events..."
+	}
+
+	return "Event log (last " + fmt.Sprintf("%d", len(el.logLines)) + " entries):\n" +
+		strings.Join(el.logLines, "\n")
 }
 
 // New constructs a Model from dataset.
@@ -40,6 +199,8 @@ func New(d data.Dataset) *Model {
 		focusedPID:       0,
 		viewportVirtual:  viewport.New(0, 0),
 		viewportPhysical: viewport.New(0, 0),
+		viewportLog:      viewport.New(0, 0),
+		eventLogger:      NewEventLogger(),
 	}
 
 	items := make([]list.Item, 0, len(d.Order))
@@ -74,7 +235,16 @@ func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 	m.setTargetPID = fn
 }
 
-func (m *Model) Init() tea.Cmd { return nil }
+// Init returns the initial command for the model
+func (m *Model) Init() tea.Cmd {
+	// Initialize log viewport
+	m.updateLogViewport()
+
+	// Start periodic event log flushing
+	return tea.Tick(constants.EventLogIntervalSeconds*time.Second, func(time.Time) tea.Msg {
+		return uimsg.FlushEventLog{}
+	})
+}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -82,6 +252,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Set error for display in UI
 		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
 		return m, nil
+	case uimsg.FlushEventLog:
+		// Flush accumulated event logs to display
+		m.eventLogger.FlushLog()
+		m.updateLogViewport()
+		return m, tea.Tick(constants.EventLogIntervalSeconds*time.Second, func(time.Time) tea.Msg {
+			return uimsg.FlushEventLog{}
+		})
 	case tea.KeyMsg:
 		if handler, ok := m.keyHandlers()[msg.String()]; ok {
 			return handler()
@@ -204,9 +381,22 @@ func (m *Model) View() string {
 
 func (m *Model) renderSplitDetails() string {
 	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(available)
-	virtualBox := box.Height(rowHeight).Render(m.viewportVirtual.View())
-	physicalBox := box.Height(secondRowHeight).Render(m.viewportPhysical.View())
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+
+	// Virtual memory section (top)
+	virtualBox := box.Width(available).Height(rowHeight).Render(m.viewportVirtual.View())
+
+	// Physical memory section (bottom) - split into two halves
+	physicalWidth := (available - 1) / 2 // -1 for separator
+	if physicalWidth < 10 {
+		physicalWidth = available // fallback if too narrow
+	}
+
+	physicalLeft := box.Width(physicalWidth).Height(secondRowHeight).Render(m.viewportPhysical.View())
+	physicalRight := box.Width(available - physicalWidth - 1).Height(secondRowHeight).Render(m.viewportLog.View())
+
+	// Join left and right physical sections horizontally
+	physicalBox := lipgloss.JoinHorizontal(lipgloss.Top, physicalLeft, physicalRight)
 
 	stack := lipgloss.JoinVertical(lipgloss.Left, virtualBox, physicalBox)
 	return stack
@@ -364,6 +554,23 @@ func (m *Model) ensureSelection(items []list.Item) bool {
 func (m *Model) currentProcessData() (*data.ProcessData, bool) {
 	pd, ok := m.data.Processes[m.selectedPID]
 	return pd, ok
+}
+
+// updateLogViewport updates the log viewport with current event log content
+func (m *Model) updateLogViewport() {
+	available, _, secondRowHeight, _ := m.layoutMetrics()
+	logWidth := (available - 1) / 2
+	if logWidth < 10 {
+		logWidth = available
+	}
+
+	m.viewportLog.Width = logWidth
+	m.viewportLog.Height = secondRowHeight - 2
+	if m.viewportLog.Height < 3 {
+		m.viewportLog.Height = 3
+	}
+
+	m.viewportLog.SetContent(m.eventLogger.GetLogContent())
 }
 
 // updateViewports calculates viewport dimensions and renders content for both the virtual
