@@ -79,7 +79,7 @@ const (
 // Logging constants
 const (
 	// Event logging interval in seconds
-	EventLogIntervalSeconds = 20
+	EventLogIntervalSeconds = 1
 )
 
 // Color constants for memory status visualization
