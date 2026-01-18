@@ -240,10 +240,15 @@ func (m *Model) Init() tea.Cmd {
 	// Initialize log viewport
 	m.updateLogViewport()
 
-	// Start periodic event log flushing
-	return tea.Tick(constants.EventLogIntervalSeconds*time.Second, func(time.Time) tea.Msg {
-		return uimsg.FlushEventLog{}
-	})
+	// Start periodic event log flushing - send first message immediately
+	return tea.Batch(
+		// Immediate flush
+		func() tea.Msg { return uimsg.FlushEventLog{} },
+		// Then periodic
+		tea.Tick(constants.EventLogIntervalSeconds*time.Second, func(time.Time) tea.Msg {
+			return uimsg.FlushEventLog{}
+		}),
+	)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -254,8 +259,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case uimsg.FlushEventLog:
 		// Flush accumulated event logs to display
+		beforeCount := len(m.eventLogger.logLines)
 		m.eventLogger.FlushLog()
+		afterCount := len(m.eventLogger.logLines)
 		m.updateLogViewport()
+
+		// Debug: add to log content
+		currentContent := m.viewportLog.View()
+		if !strings.Contains(currentContent, "DEBUG:") {
+			debugInfo := fmt.Sprintf("\nDEBUG: Flush called, lines: %d->%d", beforeCount, afterCount)
+			m.viewportLog.SetContent(currentContent + debugInfo)
+		}
+
 		return m, tea.Tick(constants.EventLogIntervalSeconds*time.Second, func(time.Time) tea.Msg {
 			return uimsg.FlushEventLog{}
 		})
