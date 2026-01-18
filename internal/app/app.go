@@ -46,9 +46,14 @@ func (m *Model) SetErrorCallback(callback func(error)) {
 	m.dbHelper.SetErrorCallback(callback)
 }
 
-// Init starts periodic refresh.
+// Init starts periodic refresh and event log flushing.
 func (m *Model) Init() tea.Cmd {
-	return tea.Tick(m.refreshInterval, func(time.Time) tea.Msg { return refreshMsg{} })
+	return tea.Batch(
+		tea.Tick(m.refreshInterval, func(time.Time) tea.Msg { return refreshMsg{} }),
+		tea.Tick(1*time.Second, func(time.Time) tea.Msg {
+			return uimsg.FlushEventLog{}
+		}),
+	)
 }
 
 // Update processes incoming messages from eBPF collectors and UI.
@@ -85,6 +90,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			eventType = "swap_in"
 		}
 		m.ui.RecordEvent(eventType, v.Address)
+		return m, nil
+	case uimsg.FlushEventLog:
+		// Flush event logs in UI model
+		m.ui.FlushEventLogs()
 		return m, nil
 	case uimsg.LoadSmapsRequest:
 		m.dbHelper.LoadSmapsForProcess(v.PID)
