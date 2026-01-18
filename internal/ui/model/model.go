@@ -17,6 +17,13 @@ import (
 	uirender "deep_in_memory/internal/ui/render"
 )
 
+// Notification represents a temporary message shown at the top of the screen
+type Notification struct {
+	Message   string
+	Severity  string // "info", "warning", "error", "success"
+	ShowUntil time.Time
+}
+
 // Model wraps the Bubble Tea state for the TUI.
 type Model struct {
 	list             list.Model
@@ -29,7 +36,42 @@ type Model struct {
 	viewportVirtual  viewport.Model
 	viewportPhysical viewport.Model
 	setTargetPID     func(int) error
-	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
+	rangesPage       int           // Current page for virtual ranges pagination (0-indexed)
+	notification     *Notification // Current notification to display
+}
+
+// ShowNotification displays a temporary notification at the top of the screen
+func (m *Model) ShowNotification(message, severity string, duration time.Duration) {
+	m.notification = &Notification{
+		Message:   message,
+		Severity:  severity,
+		ShowUntil: time.Now().Add(duration),
+	}
+}
+
+// HideNotification clears the current notification
+func (m *Model) HideNotification() {
+	m.notification = nil
+}
+
+// getNotificationColor returns the appropriate color for notification severity
+func (m *Model) getNotificationColor() string {
+	if m.notification == nil {
+		return "#ffffff"
+	}
+
+	switch m.notification.Severity {
+	case "error":
+		return "#ff5f5f" // Red
+	case "warning":
+		return "#ffaf5f" // Orange
+	case "success":
+		return "#5fff5f" // Green
+	case "info":
+		return "#5f87ff" // Blue
+	default:
+		return "#5f87ff" // Default blue
+	}
 }
 
 // New constructs a Model from dataset.
@@ -40,6 +82,7 @@ func New(d data.Dataset) *Model {
 		focusedPID:       0,
 		viewportVirtual:  viewport.New(0, 0),
 		viewportPhysical: viewport.New(0, 0),
+		notification:     nil,
 	}
 
 	items := make([]list.Item, 0, len(d.Order))
@@ -74,13 +117,26 @@ func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 	m.setTargetPID = fn
 }
 
-func (m *Model) Init() tea.Cmd { return nil }
+// Init returns the initial command for the model
+func (m *Model) Init() tea.Cmd {
+	// Show welcome notification
+	m.ShowNotification("Welcome to Deep In Memory - eBPF Memory Tracer", "info", 3*time.Second)
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+		return uimsg.HideNotification{}
+	})
+}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case uimsg.ApplicationError:
-		// Set error for display in UI
-		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
+		// Show notification instead of setting persistent error
+		m.ShowNotification(msg.Message, msg.Severity, 3*time.Second)
+		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return uimsg.HideNotification{}
+		})
+	case uimsg.HideNotification:
+		// Hide the current notification
+		m.HideNotification()
 		return m, nil
 	case tea.KeyMsg:
 		if handler, ok := m.keyHandlers()[msg.String()]; ok {
@@ -195,11 +251,36 @@ func (m *Model) View() string {
 		return fmt.Sprintf("error: %v", m.err)
 	}
 
+	// Check if notification should be hidden
+	if m.notification != nil && time.Now().After(m.notification.ShowUntil) {
+		m.HideNotification()
+	}
+
+	var content string
+
+	// Render notification if present
+	if m.notification != nil {
+		notificationStyle := lipgloss.NewStyle().
+			Background(lipgloss.Color(m.getNotificationColor())).
+			Foreground(lipgloss.Color("#000000")).
+			Bold(true).
+			Width(m.width).
+			Align(lipgloss.Center).
+			Padding(0, 2)
+
+		notificationText := m.notification.Message
+		content += notificationStyle.Render(notificationText) + "\n"
+	}
+
+	// Main content
 	left := m.list.View()
 	leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
 	right := m.renderSplitDetails()
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
+	content += mainContent
+
+	return content
 }
 
 func (m *Model) renderSplitDetails() string {

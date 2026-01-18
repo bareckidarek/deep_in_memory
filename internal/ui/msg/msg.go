@@ -79,3 +79,6 @@ type ApplicationError struct {
 	Message  string
 	Severity string // "warning", "error", "info"
 }
+
+// HideNotification is sent to hide the current notification
+type HideNotification struct{}
