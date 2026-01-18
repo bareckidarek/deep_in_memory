@@ -328,6 +328,9 @@ func (m *Model) syncLayout() {
 	} else {
 		m.clearViewports()
 	}
+
+	// Always update log viewport as it's independent of process selection
+	m.updateLogViewport()
 }
 
 // leftPaneWidth approximates rendered width of the bordered list box.
@@ -393,6 +396,9 @@ func (m *Model) renderSplitDetails() string {
 	}
 
 	physicalLeft := box.Width(physicalWidth).Height(secondRowHeight).Render(m.viewportPhysical.View())
+
+	// Ensure log viewport is updated before rendering
+	m.updateLogViewport()
 	physicalRight := box.Width(available - physicalWidth - 1).Height(secondRowHeight).Render(m.viewportLog.View())
 
 	// Join left and right physical sections horizontally

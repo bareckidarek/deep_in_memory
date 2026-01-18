@@ -359,4 +359,6 @@ func TestSyncLayout_WithSelection(t *testing.T) {
 	model.syncLayout()
 
 	assert.NotEmpty(t, model.viewportVirtual.View())
+	assert.NotEmpty(t, model.viewportLog.View())
+	assert.Contains(t, model.viewportLog.View(), "Event log")
 }
