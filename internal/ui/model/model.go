@@ -184,7 +184,7 @@ func (el *EventLogger) GetLogContent() string {
 	defer el.mu.RUnlock()
 
 	if len(el.logLines) == 0 {
-		return "Event log: no events recorded yet\nWaiting for eBPF events..."
+		return "EVENT LOG\nNo events recorded yet\nWaiting for eBPF events..."
 	}
 
 	return "Event log (last " + fmt.Sprintf("%d", len(el.logLines)) + " entries):\n" +
@@ -399,7 +399,11 @@ func (m *Model) renderSplitDetails() string {
 
 	// Ensure log viewport is updated before rendering
 	m.updateLogViewport()
-	physicalRight := box.Width(available - physicalWidth - 1).Height(secondRowHeight).Render(m.viewportLog.View())
+	logContent := m.viewportLog.View()
+	if logContent == "" {
+		logContent = "[LOG WINDOW]\nEmpty log"
+	}
+	physicalRight := box.Width(available - physicalWidth - 1).Height(secondRowHeight).Render(logContent)
 
 	// Join left and right physical sections horizontally
 	physicalBox := lipgloss.JoinHorizontal(lipgloss.Top, physicalLeft, physicalRight)

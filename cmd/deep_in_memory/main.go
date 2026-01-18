@@ -119,6 +119,12 @@ func main() {
 	// Set the target PID setter in the app model if eBPF is enabled
 	if sharedState != nil {
 		appModel.SetTargetPIDSetter(sharedState.SetTargetPID)
+	} else {
+		// Notify user that eBPF is not available
+		p.Send(uimsg.ApplicationError{
+			Message:  "eBPF collectors not available. Event logging will not show real events.",
+			Severity: "info",
+		})
 	}
 
 	// Set error callback for database operations
