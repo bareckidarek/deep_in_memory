@@ -29,6 +29,7 @@ type Model struct {
 	err              error
 	viewportVirtual  viewport.Model
 	viewportPhysical viewport.Model
+	viewportLogs     viewport.Model
 	setTargetPID     func(int) error
 	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
 
@@ -46,7 +47,11 @@ func New(d data.Dataset) *Model {
 		focusedPID:       0,
 		viewportVirtual:  viewport.New(),
 		viewportPhysical: viewport.New(),
+		viewportLogs:     viewport.New(),
 	}
+
+	// Initialize logs viewport with default content
+	m.viewportLogs.SetContent("[logs]\n\nNo events recorded")
 
 	items := make([]list.Item, 0, len(d.Order))
 	for _, pid := range d.Order {
@@ -55,10 +60,14 @@ func New(d data.Dataset) *Model {
 
 	delegate := newProcessDelegate(m)
 	l := list.New(items, delegate, constants.DefaultListWidth, constants.DefaultListHeight)
-	l.Title = "Processes"
+	l.Title = "[processes]"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
+	
+	// Set title style to match other section headers
+	l.Styles.Title = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Bold(true)
+	
 	m.list = l
 
 	if len(d.Order) > 0 {
@@ -80,10 +89,36 @@ func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 	m.setTargetPID = fn
 }
 
-func (m *Model) Init() tea.Cmd { return nil }
+func (m *Model) Init() tea.Cmd {
+	return nil // App handles log request timing
+}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case uimsg.LogsResponseMsg:
+		// Update logs viewport with received logs
+		if len(msg.Logs) == 0 {
+			styledTitle := uirender.StyleTitle("[logs]")
+			m.viewportLogs.SetContent(styledTitle + "\n\nNo events recorded")
+		} else {
+			var lines []string
+			lines = append(lines, uirender.StyleTitle("[logs]"))
+			lines = append(lines, "") // Empty line after header
+
+			// Word wrap each log line to viewport width
+			for _, log := range msg.Logs {
+				// Wrap line if it exceeds viewport width
+				if m.viewportLogs.Width() > 0 {
+					wrapped := ansi.Wordwrap(log, m.viewportLogs.Width(), "")
+					lines = append(lines, wrapped)
+				} else {
+					lines = append(lines, log)
+				}
+			}
+
+			m.viewportLogs.SetContent(strings.Join(lines, "\n"))
+		}
+		return m, nil
 	case uimsg.ApplicationError:
 		// Set error for display in UI
 		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
@@ -100,41 +135,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.list.SetSize(constants.ListWidthFallback, max(m.height-2, constants.DefaultListHeight))
 		m.syncLayout()
-	case tea.MouseWheelMsg:
-		available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
-		_ = available
-		m2 := msg.Mouse()
-
-		if m2.X > m.leftPaneWidth() {
-			// Route wheel to the appropriate viewport region; avoid double-handling by list.
-			var cmd tea.Cmd
-			if m2.Y <= rowHeight {
-				m.viewportVirtual, cmd = m.viewportVirtual.Update(msg)
-			} else if m2.Y <= rowHeight+secondRowHeight {
-				m.viewportPhysical, cmd = m.viewportPhysical.Update(msg)
-			}
-			return m, cmd
-		}
-	case tea.MouseClickMsg:
-		m2 := msg.Mouse()
-		if m2.X <= m.leftPaneWidth() {
-			const borderOffset = constants.BorderOffset
-			const paddingOffset = constants.PaddingOffset
-			// Create a new MouseClickMsg with adjusted coordinates
-			adjusted := tea.MouseClickMsg{
-				X:      m2.X - borderOffset - paddingOffset,
-				Y:      m2.Y - borderOffset,
-				Button: m2.Button,
-				Mod:    m2.Mod,
-			}
-
-			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(adjusted)
-			if sel, ok := m.list.SelectedItem().(listItem); ok {
-				m.focusedPID = sel.pid
-			}
-			return m, cmd
-		}
 	}
 
 	var cmdList tea.Cmd
@@ -187,7 +187,7 @@ func (m *Model) layoutMetrics() (available, rowHeight, secondRowHeight, barWidth
 		barWidth = constants.MinBarWidth
 	}
 
-	contentHeight := m.height - constants.StatusBarReduction
+	contentHeight := m.height
 	if contentHeight < constants.MinContentHeight {
 		contentHeight = constants.MinContentHeight
 	}
@@ -210,7 +210,7 @@ func (m *Model) View() tea.View {
 		content = fmt.Sprintf("error: %v", m.err)
 	} else {
 		left := m.list.View()
-		leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Height(m.height - 2).Render(left)
+		leftBox := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(m.leftPaneWidth()).Height(m.height - 2).Render(left)
 		right := m.renderSplitDetails()
 		content = lipgloss.JoinHorizontal(lipgloss.Top, leftBox, right)
 	}
@@ -222,7 +222,6 @@ func (m *Model) View() tea.View {
 
 	view := tea.NewView(content)
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeAllMotion
 	return view
 }
 
@@ -344,11 +343,35 @@ func (m *Model) renderWithModal(baseContent string) string {
 
 func (m *Model) renderSplitDetails() string {
 	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(available)
-	virtualBox := box.Height(rowHeight).Render(m.viewportVirtual.View())
-	physicalBox := box.Height(secondRowHeight).Render(m.viewportPhysical.View())
 
-	stack := lipgloss.JoinVertical(lipgloss.Left, virtualBox, physicalBox)
+	// Virtual memory box (top) - subtract 2 for border
+	virtualBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(available).
+		Height(rowHeight - 2).
+		Render(m.viewportVirtual.View())
+
+	// Split second row horizontally: 50% physical memory, 50% logs
+	halfWidth := available / 2
+
+	// Physical and logs boxes - subtract 2 for border
+	physicalBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(halfWidth).
+		Height(secondRowHeight - 2).
+		Render(m.viewportPhysical.View())
+
+	logsBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(available - halfWidth).
+		Height(secondRowHeight - 2).
+		Render(m.viewportLogs.View())
+
+	secondRow := lipgloss.JoinHorizontal(lipgloss.Top, physicalBox, logsBox)
+	stack := lipgloss.JoinVertical(lipgloss.Left, virtualBox, secondRow)
 	return stack
 }
 
@@ -523,7 +546,18 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	if virtualWidth < constants.MinBarWidth {
 		virtualWidth = constants.MinBarWidth
 	}
-	physicalWidth := virtualWidth
+
+	// Split physical/logs width (second row is split horizontally)
+	halfWidth := available / 2
+	physicalWidth := halfWidth - constants.LeftPanePadding
+	logsWidth := available - halfWidth - constants.LeftPanePadding
+
+	if physicalWidth < constants.MinBarWidth {
+		physicalWidth = constants.MinBarWidth
+	}
+	if logsWidth < constants.MinBarWidth {
+		logsWidth = constants.MinBarWidth
+	}
 
 	virtualHeight := rowHeight - 2
 	if virtualHeight < constants.MinViewportHeight {
@@ -533,19 +567,61 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	if physicalHeight < constants.MinViewportHeight {
 		physicalHeight = constants.MinViewportHeight
 	}
+	logsHeight := physicalHeight // Same height as physical
 
 	m.viewportVirtual.SetWidth(virtualWidth)
 	m.viewportVirtual.SetHeight(virtualHeight)
 	m.viewportPhysical.SetWidth(physicalWidth)
 	m.viewportPhysical.SetHeight(physicalHeight)
+	m.viewportLogs.SetWidth(logsWidth)
+	m.viewportLogs.SetHeight(logsHeight)
 
 	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth, m.rangesPage, virtualWidth))
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(pd))
+	// Logs content is updated via FlushLogsMsg timer
 }
 
 func (m *Model) clearViewports() {
-	m.viewportVirtual.SetContent("No process selected.\nPress Enter on a process to view details.")
-	m.viewportPhysical.SetContent("")
+	// Set dimensions same as updateViewports to maintain consistent layout
+	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
+	
+	virtualWidth := available - constants.LeftPanePadding
+	if virtualWidth < constants.MinBarWidth {
+		virtualWidth = constants.MinBarWidth
+	}
+	
+	halfWidth := available / 2
+	physicalWidth := halfWidth - constants.LeftPanePadding
+	logsWidth := available - halfWidth - constants.LeftPanePadding
+	
+	if physicalWidth < constants.MinBarWidth {
+		physicalWidth = constants.MinBarWidth
+	}
+	if logsWidth < constants.MinBarWidth {
+		logsWidth = constants.MinBarWidth
+	}
+	
+	virtualHeight := rowHeight - 2
+	if virtualHeight < constants.MinViewportHeight {
+		virtualHeight = constants.MinViewportHeight
+	}
+	physicalHeight := secondRowHeight - 2
+	if physicalHeight < constants.MinViewportHeight {
+		physicalHeight = constants.MinViewportHeight
+	}
+	logsHeight := physicalHeight
+	
+	m.viewportVirtual.SetWidth(virtualWidth)
+	m.viewportVirtual.SetHeight(virtualHeight)
+	m.viewportPhysical.SetWidth(physicalWidth)
+	m.viewportPhysical.SetHeight(physicalHeight)
+	m.viewportLogs.SetWidth(logsWidth)
+	m.viewportLogs.SetHeight(logsHeight)
+	
+	// Set content with styled titles
+	m.viewportVirtual.SetContent(uirender.StyleTitle("[virtual memory]") + "\n\nNo process selected.\nPress Enter on a process to view details.")
+	m.viewportPhysical.SetContent(uirender.StyleTitle("[physical memory]") + "\n\nNo process selected.")
+	m.viewportLogs.SetContent(uirender.StyleTitle("[logs]") + "\n\nNo events recorded")
 }
 
 // renderSummary creates a formatted summary header showing process information

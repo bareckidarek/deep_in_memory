@@ -117,6 +117,15 @@ func RenderPhysicalSectionContent(pd *data.ProcessData) string {
 	)
 }
 
+// StyleTitle applies consistent styling to section titles
+func StyleTitle(title string) string {
+	style := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+	return style.Render(title)
+}
+
 func renderSection(title string, parts ...string) string {
 	compact := make([]string, 0, len(parts)+1)
 	compact = append(compact, title)

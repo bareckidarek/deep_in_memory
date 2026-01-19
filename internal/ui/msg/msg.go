@@ -82,3 +82,14 @@ type ApplicationError struct {
 
 // HideModalMsg is sent after the modal timeout to hide the modal.
 type HideModalMsg struct{}
+
+// FlushLogsMsg is sent periodically to flush aggregated logs to the UI.
+type FlushLogsMsg struct{}
+
+// GetLogsMsg requests current logs from app layer.
+type GetLogsMsg struct{}
+
+// LogsResponseMsg contains formatted log entries for display.
+type LogsResponseMsg struct {
+	Logs []string // Pre-formatted log lines with timestamps
+}
