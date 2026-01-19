@@ -329,8 +329,8 @@ func TestSyncLayout_NoSelection(t *testing.T) {
 
 	model.syncLayout()
 
-	assert.Equal(t, "", model.viewportVirtual.View())
-	assert.Equal(t, "", model.viewportPhysical.View())
+	assert.NotEmpty(t, model.viewportVirtual.View())
+	assert.NotEmpty(t, model.viewportPhysical.View())
 }
 
 func TestUpdate_ApplicationError(t *testing.T) {

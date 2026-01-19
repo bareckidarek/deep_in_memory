@@ -64,6 +64,9 @@ const (
 
 	// Modal notification timeout
 	ModalDisplayDuration = 3 * time.Second
+
+	// Log aggregation flush interval
+	LogFlushInterval = 2 * time.Second
 )
 
 // Modal notification types
@@ -82,13 +85,6 @@ const (
 const (
 	// File system units
 	BytesPerKilobyte = 1024
-)
-
-// UI interaction constants
-const (
-	// Mouse event offsets
-	BorderOffset  = 1
-	PaddingOffset = 1
 )
 
 // Color constants for memory status visualization

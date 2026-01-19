@@ -18,7 +18,7 @@ struct brk_event {
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 1 << 24);
+    __uint(max_entries, 1 << 18);  // 256KB instead of 16MB
 } events SEC(".maps");
 
 struct {
