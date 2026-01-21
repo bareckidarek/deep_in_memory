@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	mock := newMockDb()
+	mock := newMockReader()
 	now := time.Now()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: now}},
@@ -23,24 +24,20 @@ func TestNew(t *testing.T) {
 	mock.allData = processData
 
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second, nil)
 
 	require.NotNil(t, model)
 	assert.NotNil(t, model.ui)
-	assert.Equal(t, mock, model.db)
 	assert.Equal(t, time.Second, model.refreshInterval)
-	assert.NotNil(t, model.dbHelper)
 }
 
 func TestInit(t *testing.T) {
-	mock := newMockDb()
+	mock := newMockReader()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, 500*time.Millisecond)
+	model := New(mock, dataset, 500*time.Millisecond, nil)
 
 	cmd := model.Init()
 
@@ -48,13 +45,12 @@ func TestInit(t *testing.T) {
 }
 
 func TestSetTargetPIDSetter(t *testing.T) {
-	mock := newMockDb()
+	mock := newMockReader()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second, nil)
 
 	called := false
 	setter := func(pid int) error { called = true; return nil }
@@ -65,245 +61,38 @@ func TestSetTargetPIDSetter(t *testing.T) {
 	assert.False(t, called)
 }
 
-func TestUpdate_ProcessExec(t *testing.T) {
-	mock := newMockDb()
+func TestUpdate_EventMessages_NoOpWrites(t *testing.T) {
+	mock := newMockReader()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second, nil)
 
-	ev := uimsg.ProcessExec{
-		Timestamp: time.Now(),
-		PID:       5678,
-		Comm:      "new_proc",
+	// We only assert that Update handles messages without panicking and returns a model
+	events := []interface{}{
+		uimsg.ProcessExec{Timestamp: time.Now(), PID: 5678, Comm: "new_proc"},
+		uimsg.ProcessExit{Timestamp: time.Now(), PID: 1234, Comm: "test"},
+		uimsg.ProcessMmap{Timestamp: time.Now(), PID: 1234, TID: 1234, Addr: 0x1000000, Len: 0x1000, Comm: "test"},
+		uimsg.ProcessMunmap{Timestamp: time.Now(), PID: 1234, TID: 1234, Addr: 0x1000000, Len: 0x1000, Comm: "test"},
+		uimsg.ProcessBrk{Timestamp: time.Now(), PID: 1234, TID: 1234, Brk: 0, Ret: 0x2000000, Comm: "test"},
+		uimsg.ProcessPageFault{Timestamp: time.Now(), PID: 1234, TID: 1234, Address: 0x1001000, ErrorCode: constants.PageFaultErrorCode, Comm: "test"},
+		uimsg.ProcessSwapUnswap{Timestamp: time.Now(), PID: 1234, TID: 1234, Address: 0x1000000, IsSwap: true, ErrorCode: constants.SwapEventSuccessCode, Comm: "test"},
 	}
 
-	newModel, cmd := model.Update(ev)
-
-	assert.NotNil(t, newModel)
-	assert.Nil(t, cmd)
-	stored := mock.data["5678"]
-	require.NotNil(t, stored)
-	assert.Equal(t, 5678, stored.Proc.PID)
-	assert.Equal(t, "new_proc", stored.Proc.Name)
-}
-
-func TestUpdate_ProcessExit(t *testing.T) {
-	mock := newMockDb()
-	processData := []data.ProcessData{
-		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
+	for _, e := range events {
+		newModel, _ := model.Update(e)
+		assert.NotNil(t, newModel)
 	}
-	mock.allData = processData
-	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
-
-	ev := uimsg.ProcessExit{
-		Timestamp: time.Now(),
-		PID:       1234,
-		Comm:      "test",
-	}
-
-	newModel, cmd := model.Update(ev)
-
-	assert.NotNil(t, newModel)
-	assert.Nil(t, cmd)
-	_, exists := mock.data["1234"]
-	assert.False(t, exists)
-}
-
-func TestUpdate_ProcessMmap(t *testing.T) {
-	originalPageSize := data.PageSizeBytes
-	defer func() { data.PageSizeBytes = originalPageSize }()
-	data.PageSizeBytes = 4096
-
-	mock := newMockDb()
-	processData := []data.ProcessData{
-		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
-	}
-	mock.allData = processData
-	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
-
-	ev := uimsg.ProcessMmap{
-		Timestamp: time.Now(),
-		PID:       1234,
-		TID:       1234,
-		Addr:      0x1000000,
-		Len:       0x1000,
-		Comm:      "test",
-	}
-
-	newModel, cmd := model.Update(ev)
-
-	assert.NotNil(t, newModel)
-	assert.Nil(t, cmd)
-	stored := mock.data["1234"]
-	require.NotNil(t, stored)
-	assert.Len(t, stored.Threads, 1)
-}
-
-func TestUpdate_ProcessMunmap(t *testing.T) {
-	originalPageSize := data.PageSizeBytes
-	defer func() { data.PageSizeBytes = originalPageSize }()
-	data.PageSizeBytes = 4096
-
-	thread := data.ThreadData{
-		TID: 1234,
-		Ranges: []data.Range{
-			{Start: "1000000", End: "1001000", StartVal: 0x1000000, EndVal: 0x1001000, Size: 1},
-		},
-	}
-	mock := newMockDb()
-	processData := []data.ProcessData{
-		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}, Threads: []data.ThreadData{thread}},
-	}
-	mock.allData = processData
-	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
-
-	ev := uimsg.ProcessMunmap{
-		Timestamp: time.Now(),
-		PID:       1234,
-		TID:       1234,
-		Addr:      0x1000000,
-		Len:       0x1000,
-		Comm:      "test",
-	}
-
-	newModel, cmd := model.Update(ev)
-
-	assert.NotNil(t, newModel)
-	assert.Nil(t, cmd)
-	stored := mock.data["1234"]
-	require.NotNil(t, stored)
-	assert.Len(t, stored.Threads, 1)
-}
-
-func TestUpdate_ProcessBrk(t *testing.T) {
-	originalPageSize := data.PageSizeBytes
-	defer func() { data.PageSizeBytes = originalPageSize }()
-	data.PageSizeBytes = 4096
-
-	mock := newMockDb()
-	processData := []data.ProcessData{
-		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
-	}
-	mock.allData = processData
-	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
-
-	ev := uimsg.ProcessBrk{
-		Timestamp: time.Now(),
-		PID:       1234,
-		TID:       1234,
-		Brk:       0,
-		Ret:       0x2000000,
-		Comm:      "test",
-	}
-
-	newModel, cmd := model.Update(ev)
-
-	assert.NotNil(t, newModel)
-	assert.Nil(t, cmd)
-	stored := mock.data["1234"]
-	require.NotNil(t, stored)
-	assert.Len(t, stored.Threads, 1)
-}
-
-func TestUpdate_ProcessPageFault(t *testing.T) {
-	originalPageSize := data.PageSizeBytes
-	defer func() { data.PageSizeBytes = originalPageSize }()
-	data.PageSizeBytes = 4096
-
-	thread := data.ThreadData{
-		TID: 1234,
-		Ranges: []data.Range{
-			{Start: "1000000", End: "1002000", StartVal: 0x1000000, EndVal: 0x1002000, Size: 2},
-		},
-	}
-	mock := newMockDb()
-	processData := []data.ProcessData{
-		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}, Threads: []data.ThreadData{thread}},
-	}
-	mock.allData = processData
-	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
-
-	ev := uimsg.ProcessPageFault{
-		Timestamp: time.Now(),
-		PID:       1234,
-		TID:       1234,
-		Address:   0x1001000,
-		ErrorCode: constants.PageFaultErrorCode,
-		Comm:      "test",
-	}
-
-	newModel, cmd := model.Update(ev)
-
-	assert.NotNil(t, newModel)
-	assert.Nil(t, cmd)
-	stored := mock.data["1234"]
-	require.NotNil(t, stored)
-}
-
-func TestUpdate_ProcessSwapUnswap(t *testing.T) {
-	originalPageSize := data.PageSizeBytes
-	defer func() { data.PageSizeBytes = originalPageSize }()
-	data.PageSizeBytes = 4096
-
-	thread := data.ThreadData{
-		TID: 1234,
-		Ranges: []data.Range{
-			{
-				Start:    "1000000",
-				End:      "1002000",
-				StartVal: 0x1000000,
-				EndVal:   0x1002000,
-				Size:     2,
-				Statuses: map[string]*data.StatusCount{"INIT": {Count: 1}},
-			},
-		},
-	}
-	mock := newMockDb()
-	processData := []data.ProcessData{
-		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}, Threads: []data.ThreadData{thread}},
-	}
-	mock.allData = processData
-	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
-
-	ev := uimsg.ProcessSwapUnswap{
-		Timestamp: time.Now(),
-		PID:       1234,
-		TID:       1234,
-		Address:   0x1000000,
-		IsSwap:    true,
-		ErrorCode: constants.SwapEventSuccessCode,
-		Comm:      "test",
-	}
-
-	newModel, cmd := model.Update(ev)
-
-	assert.NotNil(t, newModel)
-	assert.Nil(t, cmd)
 }
 
 func TestUpdate_LoadSmapsRequest(t *testing.T) {
-	mock := newMockDb()
+	mock := newMockReader()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second, nil)
 
 	ev := uimsg.LoadSmapsRequest{PID: 1234}
 
@@ -314,14 +103,13 @@ func TestUpdate_LoadSmapsRequest(t *testing.T) {
 }
 
 func TestUpdate_RefreshMsg(t *testing.T) {
-	mock := newMockDb()
+	mock := newMockReader()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second, nil)
 
 	newModel, cmd := model.Update(refreshMsg{})
 
@@ -330,13 +118,12 @@ func TestUpdate_RefreshMsg(t *testing.T) {
 }
 
 func TestView(t *testing.T) {
-	mock := newMockDb()
+	mock := newMockReader()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second, nil)
 
 	view := model.View()
 
@@ -349,14 +136,13 @@ func TestView(t *testing.T) {
 }
 
 func TestReload_Success(t *testing.T) {
-	mock := newMockDb()
+	mock := newMockReader()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second, nil)
 
 	model.reload()
 
@@ -364,13 +150,12 @@ func TestReload_Success(t *testing.T) {
 }
 
 func TestReload_DBError(t *testing.T) {
-	mock := newMockDb()
+	mock := newMockReader()
 	processData := []data.ProcessData{
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second, nil)
 
 	mock.allErr = assert.AnError
 
@@ -379,7 +164,7 @@ func TestReload_DBError(t *testing.T) {
 	assert.NotNil(t, model.ui)
 }
 
-// mockAddressDb mock for address database
+// mockAddressDb mock for address database (kept for compatibility in other tests)
 type mockAddressDb struct {
 	data map[string]*data.AddressData
 }
@@ -419,3 +204,30 @@ func (m *mockAddressDb) All() ([]data.AddressData, error) {
 func (m *mockAddressDb) Close() error {
 	return nil
 }
+
+// mockReader implements persistence.Reader for tests
+type mockReader struct {
+	allData []data.ProcessData
+	allAddr []data.AddressData
+	allErr  error
+}
+
+func newMockReader() *mockReader {
+	return &mockReader{}
+}
+
+func (m *mockReader) AllProcessData(ctx context.Context) ([]data.ProcessData, error) {
+	if m.allErr != nil {
+		return nil, m.allErr
+	}
+	return m.allData, nil
+}
+
+func (m *mockReader) AllAddressData(ctx context.Context) ([]data.AddressData, error) {
+	if m.allErr != nil {
+		return nil, m.allErr
+	}
+	return m.allAddr, nil
+}
+
+func (m *mockReader) Close() error { return nil }
