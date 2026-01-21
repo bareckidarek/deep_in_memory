@@ -1,14 +1,13 @@
 package app
 
 import (
-	"context"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
-	"deep_in_memory/internal/persistence"
+	storedb "deep_in_memory/internal/thirdparty/db"
 	uimodel "deep_in_memory/internal/ui/model"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
@@ -16,24 +15,30 @@ import (
 // refreshMsg triggers a dataset reload from the DB.
 type refreshMsg struct{}
 
-// Model wraps the UI model with periodic reloads from persistence.Reader.
+// Model wraps the UI model with persistence-backed refresh.
 type Model struct {
 	ui              *uimodel.Model
-	reader          persistence.Reader
+	db              storedb.Db[data.ProcessData]
+	addressDb       storedb.Db[data.AddressData]
+	dbHelper        *DBHelper
+	addressDbHelper *AddressDBHelper
 	refreshInterval time.Duration
 	logAggregator   *LogAggregator
 	targetPID       int // Currently monitored PID
 }
 
-// New creates a lightweight app Model that only manages UI state and reloads
-// datasets from the provided persistence.Reader. eBPF and DB write logic
-// should live in `internal/collector` and `internal/persistence` respectively.
-func New(reader persistence.Reader, initial data.Dataset, refresh time.Duration, logAgg *LogAggregator) *Model {
+// New creates the main application model that coordinates UI, database, and eBPF collectors.
+// Manages periodic dataset refresh and routes events between eBPF collectors and the UI.
+// The refresh interval controls how often the UI updates with new process data.
+func New(db storedb.Db[data.ProcessData], addressDb storedb.Db[data.AddressData], initial data.Dataset, refresh time.Duration) *Model {
 	return &Model{
 		ui:              uimodel.New(initial),
-		reader:          reader,
+		db:              db,
+		addressDb:       addressDb,
+		dbHelper:        NewDBHelper(db, nil), // Will be set later
+		addressDbHelper: NewAddressDBHelper(addressDb, nil),
 		refreshInterval: refresh,
-		logAggregator:   logAgg,
+		logAggregator:   NewLogAggregator(),
 		targetPID:       0,
 	}
 }
@@ -51,9 +56,10 @@ func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 // SetErrorCallback configures error reporting for database operations.
 // Non-critical errors (like missing processes) will be reported through this callback
 // instead of being silently ignored, allowing the UI to inform the user.
-// SetErrorCallback is a no-op for the lightweight app Model; error callbacks
-// should be provided to the collector or persistence layers.
-func (m *Model) SetErrorCallback(callback func(error)) {}
+func (m *Model) SetErrorCallback(callback func(error)) {
+	m.dbHelper.SetErrorCallback(callback)
+	m.addressDbHelper.SetErrorCallback(callback)
+}
 
 // Init starts periodic refresh and initializes UI.
 func (m *Model) Init() tea.Cmd {
@@ -74,27 +80,89 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case uimsg.GetLogsMsg:
 		// Flush current aggregated logs and send to UI
-		if m.targetPID != 0 && m.logAggregator != nil {
+		if m.targetPID != 0 {
 			m.logAggregator.Flush(m.targetPID)
 		}
-		var logs []string
-		if m.logAggregator != nil {
-			logs = m.logAggregator.GetFormattedLogs()
-		}
+		logs := m.logAggregator.GetFormattedLogs()
 		// Send logs response to UI and schedule next log request
 		updated, cmd := m.ui.Update(uimsg.LogsResponseMsg{Logs: logs})
 		if ui, ok := updated.(*uimodel.Model); ok {
 			m.ui = ui
 		}
-		nextCmd := tea.Tick(constants.LogFlushInterval, func(t time.Time) tea.Msg { return uimsg.GetLogsMsg{} })
+		// Schedule next GetLogsMsg
+		nextCmd := tea.Tick(constants.LogFlushInterval, func(t time.Time) tea.Msg {
+			return uimsg.GetLogsMsg{}
+		})
 		return m, tea.Batch(cmd, nextCmd)
-	case uimsg.LoadSmapsRequest:
-		// UI handles smaps loading itself (read-only)
+	case uimsg.ProcessExec:
+		m.dbHelper.HandleProcessExec(v)
+		m.addressDbHelper.HandleProcessExec(v)
+		// Forward to UI model
 		updated, cmd := m.ui.Update(v)
 		if ui, ok := updated.(*uimodel.Model); ok {
 			m.ui = ui
 		}
 		return m, cmd
+	case uimsg.ProcessExit:
+		m.dbHelper.HandleProcessExit(v)
+		m.addressDbHelper.HandleProcessExit(v)
+		updated, cmd := m.ui.Update(v)
+		if ui, ok := updated.(*uimodel.Model); ok {
+			m.ui = ui
+		}
+		return m, cmd
+	case uimsg.ProcessMmap:
+		// Update main DB with count increments
+		m.dbHelper.HandleMmapEvent(v)
+		// Update address DB with offsets
+		m.addressDbHelper.HandleMmap(v.ToMmapEvent())
+		// Aggregate in app layer
+		if v.PID == m.targetPID {
+			m.logAggregator.Record("mmap", v.Addr, v.PID, v.TID)
+		}
+		return m, nil
+	case uimsg.ProcessMunmap:
+		m.dbHelper.HandleMunmapEvent(v)
+		m.addressDbHelper.HandleMunmap(v.ToMunmapEvent())
+		// Aggregate in app layer
+		if v.PID == m.targetPID {
+			m.logAggregator.Record("munmap", v.Addr, v.PID, v.TID)
+		}
+		return m, nil
+	case uimsg.ProcessBrk:
+		m.dbHelper.HandleBrkEvent(v)
+		m.addressDbHelper.HandleBrk(v.ToBrkEvent())
+		// Aggregate in app layer
+		if v.PID == m.targetPID {
+			m.logAggregator.Record("brk", v.Ret, v.PID, v.TID)
+		}
+		return m, nil
+	case uimsg.ProcessPageFault:
+		m.dbHelper.HandlePageFaultEvent(v)
+		m.addressDbHelper.HandlePageFault(v.ToPageFaultEvent())
+		// Aggregate in app layer
+		if v.PID == m.targetPID {
+			m.logAggregator.Record("page_fault", v.Address, v.PID, v.TID)
+		}
+		return m, nil
+	case uimsg.ProcessSwapUnswap:
+		m.dbHelper.HandleSwapEvent(v)
+		m.addressDbHelper.HandleSwap(v.ToSwapEvent())
+		// Aggregate in app layer
+		if v.PID == m.targetPID {
+			if v.IsSwap {
+				m.logAggregator.Record("swap_write", v.Address, v.PID, v.TID)
+			} else {
+				m.logAggregator.Record("swap_read", v.Address, v.PID, v.TID)
+			}
+		}
+		return m, nil
+	case uimsg.LoadSmapsRequest:
+		m.dbHelper.LoadSmapsForProcess(v.PID)
+		return m, nil
+	case uimsg.ApplicationError:
+		// Forward error to UI model for display
+		return m, nil
 	case refreshMsg:
 		m.reload()
 		return m, tea.Tick(m.refreshInterval, func(time.Time) tea.Msg { return refreshMsg{} })
@@ -113,11 +181,7 @@ func (m *Model) View() tea.View {
 }
 
 func (m *Model) reload() {
-	if m.reader == nil {
-		m.ui.SetDataset(data.Dataset{Processes: make(map[int]*data.ProcessData), Order: []int{}})
-		return
-	}
-	procs, err := m.reader.AllProcessData(context.Background())
+	procs, err := m.db.All()
 	if err != nil {
 		// Don't crash the UI, just continue with empty dataset
 		m.ui.SetDataset(data.Dataset{Processes: make(map[int]*data.ProcessData), Order: []int{}})
