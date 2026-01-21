@@ -64,10 +64,10 @@ func New(d data.Dataset) *Model {
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
-	
+
 	// Set title style to match other section headers
 	l.Styles.Title = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Bold(true)
-	
+
 	m.list = l
 
 	if len(d.Order) > 0 {
@@ -539,8 +539,7 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 
 	available, rowHeight, secondRowHeight, barWidth := m.layoutMetrics()
 	proc := pd.Proc
-	virtualCount := uirender.ActiveVirtualCount(pd.Virtual)
-	summary := m.renderSummary(proc, pd, virtualCount)
+	summary := m.renderSummary(proc, pd)
 
 	virtualWidth := available - constants.LeftPanePadding
 	if virtualWidth < constants.MinBarWidth {
@@ -584,23 +583,23 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 func (m *Model) clearViewports() {
 	// Set dimensions same as updateViewports to maintain consistent layout
 	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
-	
+
 	virtualWidth := available - constants.LeftPanePadding
 	if virtualWidth < constants.MinBarWidth {
 		virtualWidth = constants.MinBarWidth
 	}
-	
+
 	halfWidth := available / 2
 	physicalWidth := halfWidth - constants.LeftPanePadding
 	logsWidth := available - halfWidth - constants.LeftPanePadding
-	
+
 	if physicalWidth < constants.MinBarWidth {
 		physicalWidth = constants.MinBarWidth
 	}
 	if logsWidth < constants.MinBarWidth {
 		logsWidth = constants.MinBarWidth
 	}
-	
+
 	virtualHeight := rowHeight - 2
 	if virtualHeight < constants.MinViewportHeight {
 		virtualHeight = constants.MinViewportHeight
@@ -610,14 +609,14 @@ func (m *Model) clearViewports() {
 		physicalHeight = constants.MinViewportHeight
 	}
 	logsHeight := physicalHeight
-	
+
 	m.viewportVirtual.SetWidth(virtualWidth)
 	m.viewportVirtual.SetHeight(virtualHeight)
 	m.viewportPhysical.SetWidth(physicalWidth)
 	m.viewportPhysical.SetHeight(physicalHeight)
 	m.viewportLogs.SetWidth(logsWidth)
 	m.viewportLogs.SetHeight(logsHeight)
-	
+
 	// Set content with styled titles
 	m.viewportVirtual.SetContent(uirender.StyleTitle("[virtual memory]") + "\n\nNo process selected.\nPress Enter on a process to view details.")
 	m.viewportPhysical.SetContent(uirender.StyleTitle("[physical memory]") + "\n\nNo process selected.")
@@ -627,7 +626,7 @@ func (m *Model) clearViewports() {
 // renderSummary creates a formatted summary header showing process information
 // and memory statistics including reservation, allocation, page-out, and page-in counts.
 // Returns a styled table with color-coded columns for different memory statuses.
-func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData, virtualCount int) string {
+func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData) string {
 	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
 	stats := uirender.CalculateStatusStats(pd)
 

@@ -130,8 +130,6 @@ func TestGetOrCreateProcess_NewProcess(t *testing.T) {
 	assert.True(t, isNew)
 	assert.Equal(t, 1234, pd.Proc.PID)
 	assert.Equal(t, "test", pd.Proc.Name)
-	assert.NotNil(t, pd.Virtual)
-	assert.NotNil(t, pd.PFNs)
 }
 
 func TestGetOrCreateProcess_QueryError(t *testing.T) {
@@ -206,8 +204,6 @@ func TestHandleProcessExec(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Equal(t, 1234, stored.Proc.PID)
 	assert.Equal(t, "test_proc", stored.Proc.Name)
-	assert.NotNil(t, stored.Virtual)
-	assert.NotNil(t, stored.PFNs)
 }
 
 func TestHandleProcessExec_UpsertError(t *testing.T) {

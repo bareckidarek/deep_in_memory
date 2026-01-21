@@ -26,24 +26,6 @@ type Process struct {
 	StartTime time.Time
 }
 
-// VirtualPage tracks virtual address lifecycle.
-type VirtualPage struct {
-	Address   string
-	PFN       string
-	Phase     string
-	LastEvent string
-	SeenAt    time.Time
-	UpdatedAt time.Time
-}
-
-// PFNState tracks PFN lifecycle.
-type PFNState struct {
-	PFN       string
-	Phase     string
-	Virtuals  map[string]bool
-	UpdatedAt time.Time
-}
-
 // RangeCache provides fast lookup of address ranges for page faults and swap events
 type RangeCache struct {
 	Ranges     []*AddrRange // Pointers to ranges for fast iteration
@@ -54,8 +36,6 @@ type RangeCache struct {
 // ProcessData aggregates all data for a single process.
 type ProcessData struct {
 	Proc       Process
-	Virtual    map[string]*VirtualPage
-	PFNs       map[string]*PFNState
 	Threads    []ThreadData
 	rangeCache map[int]*RangeCache // TID -> RangeCache for fast lookups
 }
@@ -547,13 +527,6 @@ func BuildDataset(processes []ProcessData) Dataset {
 	for i := range processes {
 		p := processes[i]
 		pid := p.Proc.PID
-		// ensure maps are non-nil to avoid nil deref in UI
-		if p.Virtual == nil {
-			p.Virtual = make(map[string]*VirtualPage)
-		}
-		if p.PFNs == nil {
-			p.PFNs = make(map[string]*PFNState)
-		}
 		ds.Processes[pid] = &p
 		ds.Order = append(ds.Order, pid)
 	}
@@ -601,9 +574,8 @@ func LoadData(path string) (Dataset, error) {
 	// Initialize all processes from the input data.
 	for pid, proc := range procMap {
 		ds.Processes[pid] = &ProcessData{
-			Proc:    proc,
-			Virtual: make(map[string]*VirtualPage),
-			PFNs:    make(map[string]*PFNState),
+			Proc: proc,
+
 			Threads: threadMap[pid],
 		}
 		ds.Order = append(ds.Order, pid)

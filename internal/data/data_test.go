@@ -518,13 +518,6 @@ func TestBuildDataset(t *testing.T) {
 	// Verify order is by start time, then PID
 	expectedOrder := []int{1001, 1000, 1002} // early, earliest, late (actual sorting order)
 	assert.Equal(t, expectedOrder, dataset.Order)
-
-	// Verify maps are initialized
-	for _, pid := range expectedOrder {
-		pd := dataset.Processes[pid]
-		assert.NotNil(t, pd.Virtual)
-		assert.NotNil(t, pd.PFNs)
-	}
 }
 
 func TestRangeCache_Optimization(t *testing.T) {

@@ -58,8 +58,6 @@ func (h *DBHelper) GetOrCreateProcess(pid int, name string) (*data.ProcessData, 
 			Name:      name,
 			StartTime: time.Now().UTC(),
 		},
-		Virtual: make(map[string]*data.VirtualPage),
-		PFNs:    make(map[string]*data.PFNState),
 		Threads: []data.ThreadData{},
 	}
 
@@ -88,8 +86,6 @@ func (h *DBHelper) HandleProcessExec(ev uimsg.ProcessExec) error {
 			Name:      ev.Comm,
 			StartTime: ev.Timestamp.UTC(),
 		},
-		Virtual: make(map[string]*data.VirtualPage),
-		PFNs:    make(map[string]*data.PFNState),
 		Threads: []data.ThreadData{},
 	}
 
