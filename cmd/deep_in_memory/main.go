@@ -33,9 +33,18 @@ func main() {
 	}
 	defer store.Close()
 
-	// Clear database on startup for fresh state
+	addressStore, err := storedb.New[data.AddressData]("deep_in_memory_addresses")
+	if err != nil {
+		log.Fatalf("failed to open address bolt db: %v", err)
+	}
+	defer addressStore.Close()
+
+	// Clear databases on startup for fresh state
 	if err := clearDatabase(store); err != nil {
 		log.Fatalf("failed to clear database: %v", err)
+	}
+	if err := clearAddressDatabase(addressStore); err != nil {
+		log.Fatalf("failed to clear address database: %v", err)
 	}
 
 	initialProcs, err := store.All()
@@ -43,7 +52,7 @@ func main() {
 		log.Fatalf("failed to read initial data: %v", err)
 	}
 	initial := data.BuildDataset(initialProcs)
-	appModel := app.New(store, initial, constants.DefaultRefreshInterval)
+	appModel := app.New(store, addressStore, initial, constants.DefaultRefreshInterval)
 	p := tea.NewProgram(appModel)
 
 	// Start sched collector and get the shared state
@@ -144,6 +153,21 @@ func clearDatabase(store storedb.Db[data.ProcessData]) error {
 		if err := store.Delete(key); err != nil {
 			// Report delete failure but continue with other processes
 			fmt.Printf("Warning: failed to delete process %d from database: %v\n", proc.Proc.PID, err)
+		}
+	}
+	return nil
+}
+
+func clearAddressDatabase(store storedb.Db[data.AddressData]) error {
+	allData, err := store.All()
+	if err != nil {
+		return err
+	}
+	for _, addrData := range allData {
+		key := fmt.Sprintf("%d", addrData.PID)
+		if err := store.Delete(key); err != nil {
+			// Report delete failure but continue with other processes
+			fmt.Printf("Warning: failed to delete address data %d from database: %v\n", addrData.PID, err)
 		}
 	}
 	return nil

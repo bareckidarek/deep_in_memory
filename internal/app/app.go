@@ -19,7 +19,9 @@ type refreshMsg struct{}
 type Model struct {
 	ui              *uimodel.Model
 	db              storedb.Db[data.ProcessData]
+	addressDb       storedb.Db[data.AddressData]
 	dbHelper        *DBHelper
+	addressDbHelper *AddressDBHelper
 	refreshInterval time.Duration
 	logAggregator   *LogAggregator
 	targetPID       int // Currently monitored PID
@@ -28,11 +30,13 @@ type Model struct {
 // New creates the main application model that coordinates UI, database, and eBPF collectors.
 // Manages periodic dataset refresh and routes events between eBPF collectors and the UI.
 // The refresh interval controls how often the UI updates with new process data.
-func New(db storedb.Db[data.ProcessData], initial data.Dataset, refresh time.Duration) *Model {
+func New(db storedb.Db[data.ProcessData], addressDb storedb.Db[data.AddressData], initial data.Dataset, refresh time.Duration) *Model {
 	return &Model{
 		ui:              uimodel.New(initial),
 		db:              db,
+		addressDb:       addressDb,
 		dbHelper:        NewDBHelper(db, nil), // Will be set later
+		addressDbHelper: NewAddressDBHelper(addressDb, nil),
 		refreshInterval: refresh,
 		logAggregator:   NewLogAggregator(),
 		targetPID:       0,
@@ -54,6 +58,7 @@ func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 // instead of being silently ignored, allowing the UI to inform the user.
 func (m *Model) SetErrorCallback(callback func(error)) {
 	m.dbHelper.SetErrorCallback(callback)
+	m.addressDbHelper.SetErrorCallback(callback)
 }
 
 // Init starts periodic refresh and initializes UI.
@@ -91,6 +96,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, nextCmd)
 	case uimsg.ProcessExec:
 		m.dbHelper.HandleProcessExec(v)
+		m.addressDbHelper.HandleProcessExec(v)
 		// Forward to UI model
 		updated, cmd := m.ui.Update(v)
 		if ui, ok := updated.(*uimodel.Model); ok {
@@ -99,13 +105,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case uimsg.ProcessExit:
 		m.dbHelper.HandleProcessExit(v)
+		m.addressDbHelper.HandleProcessExit(v)
 		updated, cmd := m.ui.Update(v)
 		if ui, ok := updated.(*uimodel.Model); ok {
 			m.ui = ui
 		}
 		return m, cmd
 	case uimsg.ProcessMmap:
+		// Update main DB with count increments
 		m.dbHelper.HandleMmapEvent(v)
+		// Update address DB with offsets
+		m.addressDbHelper.HandleMmap(v.ToMmapEvent())
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			m.logAggregator.Record("mmap", v.Addr, v.PID, v.TID)
@@ -113,6 +123,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case uimsg.ProcessMunmap:
 		m.dbHelper.HandleMunmapEvent(v)
+		m.addressDbHelper.HandleMunmap(v.ToMunmapEvent())
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			m.logAggregator.Record("munmap", v.Addr, v.PID, v.TID)
@@ -120,6 +131,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case uimsg.ProcessBrk:
 		m.dbHelper.HandleBrkEvent(v)
+		m.addressDbHelper.HandleBrk(v.ToBrkEvent())
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			m.logAggregator.Record("brk", v.Ret, v.PID, v.TID)
@@ -127,6 +139,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case uimsg.ProcessPageFault:
 		m.dbHelper.HandlePageFaultEvent(v)
+		m.addressDbHelper.HandlePageFault(v.ToPageFaultEvent())
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			m.logAggregator.Record("page_fault", v.Address, v.PID, v.TID)
@@ -134,6 +147,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case uimsg.ProcessSwapUnswap:
 		m.dbHelper.HandleSwapEvent(v)
+		m.addressDbHelper.HandleSwap(v.ToSwapEvent())
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			if v.IsSwap {

@@ -1,12 +1,10 @@
 package db
 
 import (
-	"deep_in_memory/internal/data"
-
 	"github.com/timshannon/bolthold"
 )
 
-type Db[T data.ProcessData] interface {
+type Db[T any] interface {
 	Query(query *bolthold.Query) ([]T, error)
 	Upsert(key string, value *T) error
 	Delete(key string) error

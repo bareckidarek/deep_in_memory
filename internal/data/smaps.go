@@ -18,10 +18,10 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 	}
 	defer file.Close()
 
-	var ranges []AddrRange
+	var ranges []Range
 	scanner := bufio.NewScanner(file)
 
-	var currentRange *AddrRange
+	var currentRange *Range
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -102,7 +102,7 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 			}
 
 			size := endAddr - startAddr
-			newRange := AddrRange{
+			newRange := Range{
 				Start:    parts[0],
 				End:      parts[1],
 				StartVal: startAddr,
@@ -113,9 +113,9 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 			}
 
 			// Initialize counters to zero
-			newRange.Statuses["INIT"] = &StatusCount{Count: 0, Value: []uint64{}}
-			newRange.Statuses["SWAP"] = &StatusCount{Count: 0, Value: []uint64{}}
-			newRange.Statuses["UNSWAP"] = &StatusCount{Count: 0, Value: []uint64{}}
+			newRange.Statuses["INIT"] = &StatusCount{Count: 0}
+			newRange.Statuses["SWAP"] = &StatusCount{Count: 0}
+			newRange.Statuses["UNSWAP"] = &StatusCount{Count: 0}
 
 			currentRange = &newRange
 		} else if currentRange != nil {

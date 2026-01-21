@@ -289,7 +289,7 @@ func TestHandleMmapEvent_ExistingProcess(t *testing.T) {
 
 	existingProcess := &data.ProcessData{
 		Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()},
-		Threads: []data.ThreadData{{TID: 1234, Ranges: []data.AddrRange{
+		Threads: []data.ThreadData{{TID: 1234, Ranges: []data.Range{
 			{Start: "1000000", End: "1001000", StartVal: 0x1000000, EndVal: 0x1001000, Size: 1},
 		}}},
 	}
@@ -343,7 +343,7 @@ func TestHandleMunmapEvent_ExistingProcess(t *testing.T) {
 
 	thread := data.ThreadData{
 		TID: 1234,
-		Ranges: []data.AddrRange{
+		Ranges: []data.Range{
 			{Start: "1000000", End: "1001000", StartVal: 0x1000000, EndVal: 0x1001000, Size: 1},
 			{Start: "2000000", End: "2001000", StartVal: 0x2000000, EndVal: 0x2001000, Size: 1},
 		},
@@ -426,7 +426,7 @@ func TestHandleBrkEvent_ExistingProcess(t *testing.T) {
 
 	existingProcess := &data.ProcessData{
 		Proc:    data.Process{PID: 1234, Name: "test", StartTime: time.Now()},
-		Threads: []data.ThreadData{{TID: 1234, Ranges: []data.AddrRange{}}},
+		Threads: []data.ThreadData{{TID: 1234, Ranges: []data.Range{}}},
 	}
 	mock.setProcess(1234, existingProcess)
 
@@ -474,7 +474,7 @@ func TestHandlePageFaultEvent_ValidFault(t *testing.T) {
 
 	thread := data.ThreadData{
 		TID: 1234,
-		Ranges: []data.AddrRange{
+		Ranges: []data.Range{
 			{Start: "1000000", End: "1002000", StartVal: 0x1000000, EndVal: 0x1002000, Size: 2},
 		},
 	}
@@ -508,7 +508,7 @@ func TestHandlePageFaultEvent_WrongErrorCode(t *testing.T) {
 
 	thread := data.ThreadData{
 		TID: 1234,
-		Ranges: []data.AddrRange{
+		Ranges: []data.Range{
 			{Start: "1000000", End: "1001000", StartVal: 0x1000000, EndVal: 0x1001000, Size: 1},
 		},
 	}
@@ -560,7 +560,7 @@ func TestHandleSwapEvent_SwapOut(t *testing.T) {
 
 	thread := data.ThreadData{
 		TID: 1234,
-		Ranges: []data.AddrRange{
+		Ranges: []data.Range{
 			{
 				Start:    "1000000",
 				End:      "1002000",
@@ -606,7 +606,7 @@ func TestHandleSwapEvent_SwapIn(t *testing.T) {
 
 	thread := data.ThreadData{
 		TID: 1234,
-		Ranges: []data.AddrRange{
+		Ranges: []data.Range{
 			{
 				Start:    "1000000",
 				End:      "1002000",
