@@ -7,7 +7,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/timshannon/bolthold"
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
@@ -23,8 +22,7 @@ func TestNew(t *testing.T) {
 	mock.allData = processData
 
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	require.NotNil(t, model)
 	assert.NotNil(t, model.ui)
@@ -39,8 +37,7 @@ func TestInit(t *testing.T) {
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, 500*time.Millisecond)
+	model := New(mock, dataset, 500*time.Millisecond)
 
 	cmd := model.Init()
 
@@ -53,8 +50,7 @@ func TestSetTargetPIDSetter(t *testing.T) {
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	called := false
 	setter := func(pid int) error { called = true; return nil }
@@ -71,8 +67,7 @@ func TestUpdate_ProcessExec(t *testing.T) {
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	ev := uimsg.ProcessExec{
 		Timestamp: time.Now(),
@@ -97,8 +92,7 @@ func TestUpdate_ProcessExit(t *testing.T) {
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	ev := uimsg.ProcessExit{
 		Timestamp: time.Now(),
@@ -125,8 +119,7 @@ func TestUpdate_ProcessMmap(t *testing.T) {
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	ev := uimsg.ProcessMmap{
 		Timestamp: time.Now(),
@@ -153,7 +146,7 @@ func TestUpdate_ProcessMunmap(t *testing.T) {
 
 	thread := data.ThreadData{
 		TID: 1234,
-		Ranges: []data.Range{
+		Ranges: []data.AddrRange{
 			{Start: "1000000", End: "1001000", StartVal: 0x1000000, EndVal: 0x1001000, Size: 1},
 		},
 	}
@@ -163,8 +156,7 @@ func TestUpdate_ProcessMunmap(t *testing.T) {
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	ev := uimsg.ProcessMunmap{
 		Timestamp: time.Now(),
@@ -195,8 +187,7 @@ func TestUpdate_ProcessBrk(t *testing.T) {
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	ev := uimsg.ProcessBrk{
 		Timestamp: time.Now(),
@@ -223,7 +214,7 @@ func TestUpdate_ProcessPageFault(t *testing.T) {
 
 	thread := data.ThreadData{
 		TID: 1234,
-		Ranges: []data.Range{
+		Ranges: []data.AddrRange{
 			{Start: "1000000", End: "1002000", StartVal: 0x1000000, EndVal: 0x1002000, Size: 2},
 		},
 	}
@@ -233,8 +224,7 @@ func TestUpdate_ProcessPageFault(t *testing.T) {
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	ev := uimsg.ProcessPageFault{
 		Timestamp: time.Now(),
@@ -260,7 +250,7 @@ func TestUpdate_ProcessSwapUnswap(t *testing.T) {
 
 	thread := data.ThreadData{
 		TID: 1234,
-		Ranges: []data.Range{
+		Ranges: []data.AddrRange{
 			{
 				Start:    "1000000",
 				End:      "1002000",
@@ -277,8 +267,7 @@ func TestUpdate_ProcessSwapUnswap(t *testing.T) {
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	ev := uimsg.ProcessSwapUnswap{
 		Timestamp: time.Now(),
@@ -302,8 +291,7 @@ func TestUpdate_LoadSmapsRequest(t *testing.T) {
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	ev := uimsg.LoadSmapsRequest{PID: 1234}
 
@@ -320,8 +308,7 @@ func TestUpdate_RefreshMsg(t *testing.T) {
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	newModel, cmd := model.Update(refreshMsg{})
 
@@ -335,8 +322,7 @@ func TestView(t *testing.T) {
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	view := model.View()
 
@@ -355,8 +341,7 @@ func TestReload_Success(t *testing.T) {
 	}
 	mock.allData = processData
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	model.reload()
 
@@ -369,53 +354,11 @@ func TestReload_DBError(t *testing.T) {
 		{Proc: data.Process{PID: 1234, Name: "test", StartTime: time.Now()}},
 	}
 	dataset := data.BuildDataset(processData)
-	mockAddr := newMockAddressDb()
-	model := New(mock, mockAddr, dataset, time.Second)
+	model := New(mock, dataset, time.Second)
 
 	mock.allErr = assert.AnError
 
 	model.reload()
 
 	assert.NotNil(t, model.ui)
-}
-
-// mockAddressDb mock for address database
-type mockAddressDb struct {
-	data map[string]*data.AddressData
-}
-
-func newMockAddressDb() *mockAddressDb {
-	return &mockAddressDb{
-		data: make(map[string]*data.AddressData),
-	}
-}
-
-func (m *mockAddressDb) Query(query *bolthold.Query) ([]data.AddressData, error) {
-	result := []data.AddressData{}
-	for _, v := range m.data {
-		result = append(result, *v)
-	}
-	return result, nil
-}
-
-func (m *mockAddressDb) Upsert(key string, value *data.AddressData) error {
-	m.data[key] = value
-	return nil
-}
-
-func (m *mockAddressDb) Delete(key string) error {
-	delete(m.data, key)
-	return nil
-}
-
-func (m *mockAddressDb) All() ([]data.AddressData, error) {
-	result := []data.AddressData{}
-	for _, v := range m.data {
-		result = append(result, *v)
-	}
-	return result, nil
-}
-
-func (m *mockAddressDb) Close() error {
-	return nil
 }

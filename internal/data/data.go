@@ -19,13 +19,6 @@ func init() {
 	PageSizeBytes = uint64(syscall.Getpagesize())
 }
 
-// ProcessData aggregates all data for a single process.
-type ProcessData struct {
-	Proc       Process
-	Threads    []ThreadData
-	rangeCache map[int]*RangeCache // TID -> RangeCache for fast lookups
-}
-
 // Process mirrors a process definition.
 type Process struct {
 	PID       int
@@ -33,77 +26,99 @@ type Process struct {
 	StartTime time.Time
 }
 
+// RangeCache provides fast lookup of address ranges for page faults and swap events
+type RangeCache struct {
+	Ranges     []*AddrRange // Pointers to ranges for fast iteration
+	StartVals  []uint64     // Corresponding start addresses for binary search
+	LastUpdate time.Time    // When cache was last updated
+}
+
+// ProcessData aggregates all data for a single process.
+type ProcessData struct {
+	Proc       Process
+	Threads    []ThreadData
+	rangeCache map[int]*RangeCache // TID -> RangeCache for fast lookups
+}
+
 // ThreadData stores thread-level virtual ranges.
 type ThreadData struct {
 	TID    int
-	Ranges []Range
-}
-
-// Range represents a virtual address range and statuses.
-type Range struct {
-	Start    string
-	End      string
-	StartVal uint64
-	EndVal   uint64
-	Size     uint64
-	Statuses map[string]*StatusCount
-	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
+	Ranges []AddrRange
 }
 
 // StatusCount tracks count and list of page offsets in a particular status.
 type StatusCount struct {
-	Count int `json:"count"`
-}
-
-type AddressData struct {
-	PID        int
-	Threads    []ThreadAddressData
-	rangeCache map[int]*AddressRangeCache
-}
-
-type ThreadAddressData struct {
-	TID    int
-	Ranges []AddressRange
-}
-
-type AddressRange struct {
-	StartVal uint64
-	EndVal   uint64
-	Statuses map[string]*StatusValue
-}
-
-type StatusValue struct {
+	Count int      `json:"count"`
 	Value []uint64 `json:"value,omitempty"` // List of page offsets (in pages, not bytes) from range start
 }
 
-// AddressRangeCache provides fast lookup of address ranges for page faults and swap events in AddressData
-type AddressRangeCache struct {
-	Ranges     []*AddressRange // Pointers to ranges for fast iteration
-	StartVals  []uint64        // Corresponding start addresses for binary search
-	LastUpdate time.Time       // When cache was last updated
+// addPageToStatus adds a page offset to a specific status.
+// The page is removed from all other statuses first (a page can only be in one status).
+// pageOffset is in pages (not bytes) from the range start.
+func (r *AddrRange) addPageToStatus(pageOffset uint64, status string) {
+	if r.Statuses == nil {
+		r.Statuses = make(map[string]*StatusCount)
+	}
+
+	// Remove page from all other statuses
+	for otherStatus := range r.Statuses {
+		if otherStatus != status {
+			r.removePageFromStatus(pageOffset, otherStatus)
+		}
+	}
+
+	// Initialize status if needed
+	if r.Statuses[status] == nil {
+		r.Statuses[status] = &StatusCount{Value: []uint64{}}
+	}
+
+	// Check if page already exists in this status
+	for _, offset := range r.Statuses[status].Value {
+		if offset == pageOffset {
+			return // Already in this status
+		}
+	}
+
+	// Add page to status
+	r.Statuses[status].Value = append(r.Statuses[status].Value, pageOffset)
+	r.Statuses[status].Count = len(r.Statuses[status].Value)
 }
 
-// RangeCache provides fast lookup of address ranges for page faults and swap events
-type RangeCache struct {
-	Ranges     []*Range  // Pointers to ranges for fast iteration
-	StartVals  []uint64  // Corresponding start addresses for binary search
-	LastUpdate time.Time // When cache was last updated
+// removePageFromStatus removes a page offset from a specific status.
+func (r *AddrRange) removePageFromStatus(pageOffset uint64, status string) {
+	if r.Statuses == nil || r.Statuses[status] == nil {
+		return
+	}
+
+	// Find and remove page
+	for i, offset := range r.Statuses[status].Value {
+		if offset == pageOffset {
+			// Remove by swapping with last element and truncating
+			lastIdx := len(r.Statuses[status].Value) - 1
+			r.Statuses[status].Value[i] = r.Statuses[status].Value[lastIdx]
+			r.Statuses[status].Value = r.Statuses[status].Value[:lastIdx]
+			r.Statuses[status].Count = len(r.Statuses[status].Value)
+			return
+		}
+	}
 }
 
 // incrementStatus increments the count for a given status in the range.
-func (r *Range) incrementStatus(status string) {
+// Deprecated: Use addPageToStatus instead.
+func (r *AddrRange) incrementStatus(status string) {
 	if r.Statuses == nil {
 		r.Statuses = make(map[string]*StatusCount)
 	}
 	if r.Statuses[status] == nil {
-		r.Statuses[status] = &StatusCount{}
+		r.Statuses[status] = &StatusCount{Value: []uint64{}}
 	}
 	r.Statuses[status].Count++
 }
 
 // decrementStatus decrements the count for a given status in the range.
 // If count goes below 0, it's clamped to 0.
-func (r *Range) decrementStatus(status string) {
+// Deprecated: Use removePageFromStatus instead.
+func (r *AddrRange) decrementStatus(status string) {
 	if r.Statuses == nil {
 		return
 	}
@@ -115,10 +130,21 @@ func (r *Range) decrementStatus(status string) {
 	}
 }
 
+// AddrRange represents a virtual address range and statuses.
+type AddrRange struct {
+	Start    string
+	End      string
+	StartVal uint64
+	EndVal   uint64
+	Size     uint64
+	Statuses map[string]*StatusCount
+	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
+}
+
 // SortRanges orders address ranges for consistent display in the UI.
 // Priority order: heap ranges first, then anonymous ranges, then labeled ranges,
 // and finally file/library-backed ranges. Within each category, ranges are sorted by address.
-func SortRanges(ranges []Range) {
+func SortRanges(ranges []AddrRange) {
 	sort.SliceStable(ranges, func(i, j int) bool {
 		// Helper to check if label contains file/lib reference
 		isFileRef := func(label string) bool {
@@ -137,7 +163,7 @@ func SortRanges(ranges []Range) {
 		// Category 0: empty label
 		// Category 1: non-empty label, no file/lib
 		// Category 2: file/lib reference
-		getCategory := func(r Range) int {
+		getCategory := func(r AddrRange) int {
 			if r.Label == "" {
 				return 0
 			}
@@ -165,342 +191,6 @@ type Dataset struct {
 	Processes map[int]*ProcessData
 	Order     []int
 }
-
-// AddressDataset is the top-level container for address offset data
-type AddressDataset struct {
-	Processes map[int]*AddressData
-}
-
-// ===== AddressData methods for managing page offsets in separate database =====
-
-// addPageToStatus adds a page offset to a specific status in AddressRange.
-// The page is removed from all other statuses first (a page can only be in one status).
-// pageOffset is in pages (not bytes) from the range start.
-func (r *AddressRange) addPageToStatus(pageOffset uint64, status string) {
-	if r.Statuses == nil {
-		r.Statuses = make(map[string]*StatusValue)
-	}
-
-	// Remove page from all other statuses
-	for otherStatus := range r.Statuses {
-		if otherStatus != status {
-			r.removePageFromStatus(pageOffset, otherStatus)
-		}
-	}
-
-	// Initialize status if needed
-	if r.Statuses[status] == nil {
-		r.Statuses[status] = &StatusValue{Value: []uint64{}}
-	}
-
-	// Check if page already exists in this status
-	for _, offset := range r.Statuses[status].Value {
-		if offset == pageOffset {
-			return // Already in this status
-		}
-	}
-
-	// Add page to status
-	r.Statuses[status].Value = append(r.Statuses[status].Value, pageOffset)
-}
-
-// removePageFromStatus removes a page offset from a specific status in AddressRange.
-func (r *AddressRange) removePageFromStatus(pageOffset uint64, status string) {
-	if r.Statuses == nil || r.Statuses[status] == nil {
-		return
-	}
-
-	// Find and remove page
-	for i, offset := range r.Statuses[status].Value {
-		if offset == pageOffset {
-			// Remove by swapping with last element and truncating
-			lastIdx := len(r.Statuses[status].Value) - 1
-			r.Statuses[status].Value[i] = r.Statuses[status].Value[lastIdx]
-			r.Statuses[status].Value = r.Statuses[status].Value[:lastIdx]
-			return
-		}
-	}
-}
-
-// invalidateAddressRangeCache marks the address range cache for a thread as stale
-func (ad *AddressData) invalidateAddressRangeCache(tid int) {
-	if ad.rangeCache != nil {
-		delete(ad.rangeCache, tid)
-	}
-}
-
-// getAddressRangeCache gets or creates an address range cache for a thread
-func (ad *AddressData) getAddressRangeCache(tid int) *AddressRangeCache {
-	if ad.rangeCache == nil {
-		ad.rangeCache = make(map[int]*AddressRangeCache)
-	}
-
-	cache, exists := ad.rangeCache[tid]
-	if !exists {
-		ad.rangeCache[tid] = &AddressRangeCache{
-			LastUpdate: time.Now(),
-		}
-		return ad.rangeCache[tid]
-	}
-
-	return cache
-}
-
-// rebuildAddressRangeCache reconstructs the internal cache for fast address range lookups in AddressData
-func (ad *AddressData) rebuildAddressRangeCache(tid int) {
-	cache := ad.getAddressRangeCache(tid)
-
-	// Find thread
-	threadIdx := -1
-	for i, th := range ad.Threads {
-		if th.TID == tid {
-			threadIdx = i
-			break
-		}
-	}
-
-	if threadIdx == -1 {
-		// Thread not found, clear cache
-		cache.Ranges = nil
-		cache.StartVals = nil
-		return
-	}
-
-	thread := ad.Threads[threadIdx]
-	cache.Ranges = make([]*AddressRange, len(thread.Ranges))
-	cache.StartVals = make([]uint64, len(thread.Ranges))
-
-	for i := range thread.Ranges {
-		cache.Ranges[i] = &thread.Ranges[i]
-		cache.StartVals[i] = thread.Ranges[i].StartVal
-	}
-
-	cache.LastUpdate = time.Now()
-}
-
-// findAddressRangeForAddr efficiently locates the address range containing a specific address in AddressData
-func (ad *AddressData) findAddressRangeForAddr(tid int, addr uint64) *AddressRange {
-	cache := ad.getAddressRangeCache(tid)
-
-	// Rebuild cache if stale or empty
-	if len(cache.Ranges) == 0 || time.Since(cache.LastUpdate) > constants.RangeCacheRefreshInterval {
-		ad.rebuildAddressRangeCache(tid)
-		cache = ad.rangeCache[tid]
-	}
-
-	// Binary search for the correct range
-	left, right := 0, len(cache.StartVals)-1
-	for left <= right {
-		mid := left + (right-left)/2
-		if addr >= cache.StartVals[mid] {
-			if mid == len(cache.StartVals)-1 || addr < cache.StartVals[mid+1] {
-				// Found the range - check if address is within bounds
-				r := cache.Ranges[mid]
-				if addr >= r.StartVal && addr < r.EndVal {
-					return r
-				}
-				break
-			}
-			left = mid + 1
-		} else {
-			right = mid - 1
-		}
-	}
-
-	// Linear search as fallback for edge cases
-	for _, r := range cache.Ranges {
-		if addr >= r.StartVal && addr < r.EndVal {
-			return r
-		}
-	}
-
-	return nil
-}
-
-// AddMmapAddressRange records a new virtual memory allocation in AddressData
-func (ad *AddressData) AddMmapAddressRange(tid int, addr uint64, length uint64) {
-	if ad.Threads == nil {
-		ad.Threads = []ThreadAddressData{}
-	}
-
-	// Find or create thread
-	var threadIdx = -1
-	for i, th := range ad.Threads {
-		if th.TID == tid {
-			threadIdx = i
-			break
-		}
-	}
-
-	if threadIdx == -1 {
-		// Create new thread
-		ad.Threads = append(ad.Threads, ThreadAddressData{
-			TID:    tid,
-			Ranges: []AddressRange{},
-		})
-		threadIdx = len(ad.Threads) - 1
-	}
-
-	// Create new address range
-	startAddr := addr
-	endAddr := addr + length
-	newRange := AddressRange{
-		StartVal: startAddr,
-		EndVal:   endAddr,
-		Statuses: make(map[string]*StatusValue),
-	}
-
-	ad.Threads[threadIdx].Ranges = append(ad.Threads[threadIdx].Ranges, newRange)
-
-	// Invalidate cache for this thread
-	ad.invalidateAddressRangeCache(tid)
-}
-
-// ExtendBrkAddressRange manages heap growth/shrinkage in AddressData
-func (ad *AddressData) ExtendBrkAddressRange(tid int, brk uint64, ret uint64) {
-	if ad.Threads == nil {
-		ad.Threads = []ThreadAddressData{}
-	}
-
-	// Find or create thread
-	var threadIdx = -1
-	for i, th := range ad.Threads {
-		if th.TID == tid {
-			threadIdx = i
-			break
-		}
-	}
-
-	if threadIdx == -1 {
-		// Create new thread
-		ad.Threads = append(ad.Threads, ThreadAddressData{
-			TID:    tid,
-			Ranges: []AddressRange{},
-		})
-		threadIdx = len(ad.Threads) - 1
-	}
-
-	// If brk==0, this is a query - ret contains the current break
-	if brk == 0 {
-		// Find existing heap range or create new one
-		heapIdx := -1
-		for i, r := range ad.Threads[threadIdx].Ranges {
-			// We can't check label in AddressRange, so we find by matching ret value
-			if r.StartVal <= ret && r.EndVal >= ret {
-				heapIdx = i
-				break
-			}
-		}
-
-		if heapIdx == -1 {
-			// Create initial heap range (start == end == ret)
-			newRange := AddressRange{
-				StartVal: ret,
-				EndVal:   ret,
-				Statuses: make(map[string]*StatusValue),
-			}
-			ad.Threads[threadIdx].Ranges = append(ad.Threads[threadIdx].Ranges, newRange)
-		}
-		return
-	}
-
-	// brk != 0: extending or shrinking the heap
-	// Find existing heap range - assume it's the range containing or near ret
-	heapIdx := -1
-	for i, r := range ad.Threads[threadIdx].Ranges {
-		if r.StartVal <= ret && ret <= r.EndVal+PageSizeBytes {
-			heapIdx = i
-			break
-		}
-	}
-
-	if heapIdx != -1 {
-		// Extend the existing heap range
-		heap := &ad.Threads[threadIdx].Ranges[heapIdx]
-		if ret > heap.EndVal {
-			heap.EndVal = ret
-		} else if ret < heap.EndVal {
-			heap.EndVal = ret
-		}
-
-		ad.invalidateAddressRangeCache(tid)
-	}
-}
-
-// RemoveMmapAddressRange removes a virtual address range from AddressData
-func (ad *AddressData) RemoveMmapAddressRange(tid int, addr uint64, length uint64) {
-	if ad.Threads == nil {
-		return
-	}
-
-	endAddr := addr + length
-
-	// Find thread
-	for i, th := range ad.Threads {
-		if th.TID != tid {
-			continue
-		}
-
-		// Find and remove overlapping ranges
-		newRanges := []AddressRange{}
-		for _, r := range th.Ranges {
-			// Check if range overlaps with munmap region
-			if r.StartVal < endAddr && r.EndVal > addr {
-				// This range overlaps, skip it (remove it)
-				continue
-			}
-			newRanges = append(newRanges, r)
-		}
-		ad.Threads[i].Ranges = newRanges
-		// Invalidate cache for this thread
-		ad.invalidateAddressRangeCache(tid)
-		break
-	}
-}
-
-// AddPageFaultOffset adds a page fault offset to AddressData
-func (ad *AddressData) AddPageFaultOffset(tid int, faultAddr uint64) {
-	if ad.Threads == nil {
-		return
-	}
-
-	// Calculate page address (align to page boundary)
-	pageAddr := (faultAddr / PageSizeBytes) * PageSizeBytes
-
-	// Use optimized range lookup
-	r := ad.findAddressRangeForAddr(tid, pageAddr)
-	if r != nil {
-		// Calculate offset from range start
-		pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
-		// Add to INIT status
-		r.addPageToStatus(pageOffset, "INIT")
-	}
-}
-
-// AddSwapOffset adds a swap offset to AddressData
-func (ad *AddressData) AddSwapOffset(tid int, swapAddr uint64, isSwap bool) {
-	if ad.Threads == nil {
-		return
-	}
-
-	// Use optimized range lookup
-	r := ad.findAddressRangeForAddr(tid, swapAddr)
-	if r != nil {
-		pageOffset := (swapAddr - r.StartVal) / PageSizeBytes
-
-		if isSwap {
-			// swap_writepage: move from INIT to SWAP
-			r.removePageFromStatus(pageOffset, "INIT")
-			r.addPageToStatus(pageOffset, "SWAP")
-		} else {
-			// do_swap_page: move from SWAP to UNSWAP
-			r.removePageFromStatus(pageOffset, "SWAP")
-			r.addPageToStatus(pageOffset, "UNSWAP")
-		}
-	}
-}
-
-// ===== End of AddressData methods =====
 
 // invalidateRangeCache marks the range cache for a thread as stale
 func (pd *ProcessData) invalidateRangeCache(tid int) {
@@ -549,7 +239,7 @@ func (pd *ProcessData) rebuildRangeCache(tid int) {
 	}
 
 	thread := pd.Threads[threadIdx]
-	cache.Ranges = make([]*Range, len(thread.Ranges))
+	cache.Ranges = make([]*AddrRange, len(thread.Ranges))
 	cache.StartVals = make([]uint64, len(thread.Ranges))
 
 	for i := range thread.Ranges {
@@ -563,7 +253,7 @@ func (pd *ProcessData) rebuildRangeCache(tid int) {
 // findRangeForAddr efficiently locates the virtual address range containing a specific address.
 // Uses a cached binary search for O(log n) lookup performance, rebuilding the cache
 // if it's stale or doesn't exist. Returns nil if no range contains the address.
-func (pd *ProcessData) findRangeForAddr(tid int, addr uint64) *Range {
+func (pd *ProcessData) findRangeForAddr(tid int, addr uint64) *AddrRange {
 	cache := pd.getRangeCache(tid)
 
 	// Rebuild cache if stale or empty
@@ -632,7 +322,7 @@ func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
 		// Create new thread
 		pd.Threads = append(pd.Threads, ThreadData{
 			TID:    tid,
-			Ranges: []Range{},
+			Ranges: []AddrRange{},
 		})
 		threadIdx = len(pd.Threads) - 1
 	}
@@ -640,7 +330,7 @@ func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
 	// Create new range
 	startAddr := addr
 	endAddr := addr + length
-	newRange := Range{
+	newRange := AddrRange{
 		Start:    fmt.Sprintf("%x", startAddr),
 		End:      fmt.Sprintf("%x", endAddr),
 		StartVal: startAddr,
@@ -679,7 +369,7 @@ func (pd *ProcessData) ExtendBrkRange(tid int, brk uint64, ret uint64) {
 		// Create new thread
 		pd.Threads = append(pd.Threads, ThreadData{
 			TID:    tid,
-			Ranges: []Range{},
+			Ranges: []AddrRange{},
 		})
 		threadIdx = len(pd.Threads) - 1
 	}
@@ -697,7 +387,7 @@ func (pd *ProcessData) ExtendBrkRange(tid int, brk uint64, ret uint64) {
 
 		if heapIdx == -1 {
 			// Create initial heap range (start == end == ret)
-			newRange := Range{
+			newRange := AddrRange{
 				Start:    fmt.Sprintf("%x", ret),
 				End:      fmt.Sprintf("%x", ret),
 				StartVal: ret,
@@ -814,7 +504,7 @@ func (pd *ProcessData) RemoveMmapRange(tid int, addr uint64, length uint64) {
 		}
 
 		// Find and remove overlapping ranges
-		newRanges := []Range{}
+		newRanges := []AddrRange{}
 		for _, r := range th.Ranges {
 			// Check if range overlaps with munmap region
 			if r.StartVal < endAddr && r.EndVal > addr {
@@ -937,8 +627,8 @@ func parseTime(ts string) time.Time {
 	return t.UTC()
 }
 
-func convertRanges(rawRanges []rawRange) []Range {
-	ranges := make([]Range, 0, len(rawRanges))
+func convertRanges(rawRanges []rawRange) []AddrRange {
+	ranges := make([]AddrRange, 0, len(rawRanges))
 	for _, rr := range rawRanges {
 		start, err1 := parseAddress(rr.StartAddress)
 		end, err2 := parseAddress(rr.EndAddress)
@@ -952,7 +642,7 @@ func convertRanges(rawRanges []rawRange) []Range {
 				statuses[key] = val
 			}
 		}
-		ranges = append(ranges, Range{
+		ranges = append(ranges, AddrRange{
 			Start:    rr.StartAddress,
 			End:      rr.EndAddress,
 			StartVal: start,

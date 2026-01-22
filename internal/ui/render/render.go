@@ -200,7 +200,7 @@ func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) strin
 		threadIdx int
 		threadID  int
 		rangeIdx  int
-		range_    data.Range
+		range_    data.AddrRange
 	}
 
 	var allRanges []rangeWithThread
@@ -288,7 +288,7 @@ type segment struct {
 // renderRangeBar creates a visual memory bar with status segments and text overlay.
 // Shows proportional colored segments for different memory states (INIT/SWAP/UNSWAP)
 // with address range and size information overlaid on top.
-func renderRangeBar(r data.Range, barWidth int) string {
+func renderRangeBar(r data.AddrRange, barWidth int) string {
 	if r.Size == 0 {
 		return fmt.Sprintf("%s [invalid range] %s", r.Start, r.End)
 	}
@@ -303,7 +303,7 @@ func renderRangeBar(r data.Range, barWidth int) string {
 // calculateStatusSegments computes the proportional width of each memory status segment.
 // Converts page counts to pixel widths based on total range size, ensuring
 // segments fit within the available bar width with proper scaling.
-func calculateStatusSegments(r data.Range, expandedBarWidth int) []segment {
+func calculateStatusSegments(r data.AddrRange, expandedBarWidth int) []segment {
 	var segmentList []segment
 	totalWidthUsed := 0
 
@@ -333,7 +333,7 @@ func calculateStatusSegments(r data.Range, expandedBarWidth int) []segment {
 }
 
 // buildOverlayText creates the text overlay for the memory bar
-func buildOverlayText(r data.Range, expandedBarWidth int) string {
+func buildOverlayText(r data.AddrRange, expandedBarWidth int) string {
 	startAddr := r.Start
 
 	// If there's a label, show it in the middle instead of just addresses
@@ -345,7 +345,7 @@ func buildOverlayText(r data.Range, expandedBarWidth int) string {
 }
 
 // buildLabelOverlay creates overlay text with a centered label
-func buildLabelOverlay(r data.Range, startAddr string, expandedBarWidth int) string {
+func buildLabelOverlay(r data.AddrRange, startAddr string, expandedBarWidth int) string {
 	sizeBytes := r.Size * data.PageSizeBytes
 	endInfo := fmt.Sprintf("%s (100%%=%dp [%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)))
 
@@ -366,7 +366,7 @@ func buildLabelOverlay(r data.Range, startAddr string, expandedBarWidth int) str
 }
 
 // buildAddressOverlay creates overlay text with start and end addresses
-func buildAddressOverlay(r data.Range, startAddr string, expandedBarWidth int) string {
+func buildAddressOverlay(r data.AddrRange, startAddr string, expandedBarWidth int) string {
 	sizeBytes := r.Size * data.PageSizeBytes
 	endInfo := fmt.Sprintf("%s (100%%=%dp [%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)))
 

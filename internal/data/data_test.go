@@ -386,54 +386,54 @@ func TestProcessData_RemoveMmapRange(t *testing.T) {
 	}
 }
 
-func TestRange_StatusOperations(t *testing.T) {
+func TestAddrRange_StatusOperations(t *testing.T) {
 	tests := []struct {
 		name          string
 		status        string
 		initialCount  int
-		operation     func(*Range)
+		operation     func(*AddrRange)
 		expectedCount int
 	}{
 		{
 			name:          "increment new status creates entry",
 			status:        "INIT",
 			initialCount:  0,
-			operation:     func(r *Range) { r.incrementStatus("INIT") },
+			operation:     func(r *AddrRange) { r.incrementStatus("INIT") },
 			expectedCount: 1,
 		},
 		{
 			name:          "increment existing status",
 			status:        "INIT",
 			initialCount:  2,
-			operation:     func(r *Range) { r.incrementStatus("INIT") },
+			operation:     func(r *AddrRange) { r.incrementStatus("INIT") },
 			expectedCount: 3,
 		},
 		{
 			name:          "decrement existing status",
 			status:        "INIT",
 			initialCount:  3,
-			operation:     func(r *Range) { r.decrementStatus("INIT") },
+			operation:     func(r *AddrRange) { r.decrementStatus("INIT") },
 			expectedCount: 2,
 		},
 		{
 			name:          "decrement below zero clamps to zero",
 			status:        "INIT",
 			initialCount:  1,
-			operation:     func(r *Range) { r.decrementStatus("INIT") },
+			operation:     func(r *AddrRange) { r.decrementStatus("INIT") },
 			expectedCount: 0,
 		},
 		{
 			name:          "decrement non-existent status does nothing",
 			status:        "SWAP",
 			initialCount:  0,
-			operation:     func(r *Range) { r.decrementStatus("SWAP") },
+			operation:     func(r *AddrRange) { r.decrementStatus("SWAP") },
 			expectedCount: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &Range{
+			r := &AddrRange{
 				Start:    "1000000",
 				End:      "1001000",
 				StartVal: 0x1000000,
@@ -463,7 +463,7 @@ func TestRange_StatusOperations(t *testing.T) {
 }
 
 func TestSortRanges(t *testing.T) {
-	ranges := []Range{
+	ranges := []AddrRange{
 		{Start: "3000000", StartVal: 0x3000000, Label: "/usr/lib/libc.so.6"},
 		{Start: "1000000", StartVal: 0x1000000, Label: "[heap]"},
 		{Start: "2000000", StartVal: 0x2000000, Label: ""},
