@@ -1,18 +1,17 @@
 package db
 
 import (
-	"deep_in_memory/internal/data"
 	"fmt"
 
 	"github.com/timshannon/bolthold"
 	"go.etcd.io/bbolt"
 )
 
-type BoltDb[T data.ProcessData] struct {
+type BoltDb[T any] struct {
 	store *bolthold.Store
 }
 
-func New[T data.ProcessData](dbname string) (Db[T], error) {
+func New[T any](dbname string) (Db[T], error) {
 	database, err := bolthold.Open(fmt.Sprintf("%s.db", dbname), 0600, nil)
 	if err != nil {
 		return nil, err
@@ -37,7 +36,15 @@ func (boltDb *BoltDb[T]) Query(query *bolthold.Query) ([]T, error) {
 }
 
 func (boltDb *BoltDb[T]) All() ([]T, error) {
-	return boltDb.Query(bolthold.Where("Proc.PID").Ge(0))
+	var value []T
+	return value, boltDb.store.Bolt().View(func(tx *bbolt.Tx) error {
+		// Use nil query to get all records
+		err := boltDb.store.TxFind(tx, &value, nil)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 func (boltDb *BoltDb[T]) Upsert(key string, value *T) error {

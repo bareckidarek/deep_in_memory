@@ -15,13 +15,15 @@ import (
 // DBHelper provides consistent database operations with error handling
 type DBHelper struct {
 	db            storedb.Db[data.ProcessData]
+	addressDB     storedb.Db[data.AddressData]
 	errorCallback func(error) // Callback to report non-critical errors to UI
 }
 
 // NewDBHelper creates a new database helper
-func NewDBHelper(db storedb.Db[data.ProcessData], errorCallback func(error)) *DBHelper {
+func NewDBHelper(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.AddressData], errorCallback func(error)) *DBHelper {
 	return &DBHelper{
 		db:            db,
+		addressDB:     addressDB,
 		errorCallback: errorCallback,
 	}
 }
@@ -64,12 +66,32 @@ func (h *DBHelper) GetOrCreateProcess(pid int, name string) (*data.ProcessData, 
 	return record, true, nil // Created new process, isNew = true
 }
 
-// UpsertProcess safely stores a process record with logging
+// getOrCreateAddressData retrieves AddressData for a process or creates new one
+func (h *DBHelper) getOrCreateAddressData(pid int) (*data.AddressData, error) {
+	records, err := h.addressDB.Query(bolthold.Where("PID").Eq(pid))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query address data for %d: %w", pid, err)
+	}
+
+	if len(records) > 0 {
+		return &records[0], nil
+	}
+
+	// Create new AddressData
+	return &data.AddressData{
+		PID:     pid,
+		Threads: []data.ThreadAddressData{},
+	}, nil
+}
+
+// UpsertProcess safely stores a process record to main database
+// Note: Address database is updated separately by HandlePageFaultEvent and HandleSwapEvent
 func (h *DBHelper) UpsertProcess(pid int, record *data.ProcessData) error {
 	if record == nil {
 		return fmt.Errorf("cannot upsert nil process record for PID %d", pid)
 	}
 
+	// Save record to main database (only Count fields, no Value)
 	key := fmt.Sprintf("%d", pid)
 	if err := h.db.Upsert(key, record); err != nil {
 		return fmt.Errorf("failed to upsert process %d: %w", pid, err)
@@ -95,9 +117,15 @@ func (h *DBHelper) HandleProcessExec(ev uimsg.ProcessExec) error {
 // HandleProcessExit handles process exit events
 func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 	key := fmt.Sprintf("%d", ev.PID)
+
+	// Delete from both databases
 	if err := h.db.Delete(key); err != nil {
 		return fmt.Errorf("failed to delete process %d: %w", ev.PID, err)
 	}
+
+	// Also delete from address database (ignore errors if not found)
+	h.addressDB.Delete(key)
+
 	return nil
 }
 
@@ -108,8 +136,17 @@ func (h *DBHelper) HandleMmapEvent(ev uimsg.ProcessMmap) error {
 		return fmt.Errorf("failed to get/create process for mmap %d: %w", ev.PID, err)
 	}
 
+	// Update ProcessData - add new range
 	record.AddMmapRange(ev.TID, ev.Addr, ev.Len)
-	return h.UpsertProcess(ev.PID, record)
+
+	// Save ProcessData (no Value, just structure)
+	key := fmt.Sprintf("%d", ev.PID)
+	if err := h.db.Upsert(key, record); err != nil {
+		return fmt.Errorf("failed to upsert process: %w", err)
+	}
+
+	// AddressData will be populated when first page fault/swap occurs for this range
+	return nil
 }
 
 // HandleBrkEvent handles brk events for a process
@@ -119,8 +156,17 @@ func (h *DBHelper) HandleBrkEvent(ev uimsg.ProcessBrk) error {
 		return fmt.Errorf("failed to get/create process for brk %d: %w", ev.PID, err)
 	}
 
+	// Update ProcessData - extend brk range
 	record.ExtendBrkRange(ev.TID, ev.Brk, ev.Ret)
-	return h.UpsertProcess(ev.PID, record)
+
+	// Save ProcessData (no Value, just structure)
+	key := fmt.Sprintf("%d", ev.PID)
+	if err := h.db.Upsert(key, record); err != nil {
+		return fmt.Errorf("failed to upsert process: %w", err)
+	}
+
+	// AddressData will be populated when first page fault/swap occurs for this range
+	return nil
 }
 
 // HandleMunmapEvent handles munmap events for a process
@@ -137,8 +183,19 @@ func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
 	}
 
 	record := &records[0]
+
+	// Update ProcessData - remove range
 	record.RemoveMmapRange(ev.TID, ev.Addr, ev.Len)
-	return h.UpsertProcess(ev.PID, record)
+
+	// Save ProcessData
+	key := fmt.Sprintf("%d", ev.PID)
+	if err := h.db.Upsert(key, record); err != nil {
+		return fmt.Errorf("failed to upsert process: %w", err)
+	}
+
+	// Note: We don't remove from AddressData - it will just have orphaned ranges
+	// which is fine since they won't be accessed anymore
+	return nil
 }
 
 // HandlePageFaultEvent handles page fault events for a process
@@ -160,8 +217,57 @@ func (h *DBHelper) HandlePageFaultEvent(ev uimsg.ProcessPageFault) error {
 	}
 
 	record := &records[0]
-	record.AddPageFault(ev.TID, ev.Address)
-	return h.UpsertProcess(ev.PID, record)
+
+	// Calculate page address and offset
+	pageAddr := (ev.Address / data.PageSizeBytes) * data.PageSizeBytes
+
+	// Find the range containing this address
+	r := record.FindRangeForAddr(ev.TID, pageAddr)
+	if r == nil {
+		// Range not found - this shouldn't happen but handle gracefully
+		return nil
+	}
+
+	pageOffset := (pageAddr - r.StartVal) / data.PageSizeBytes
+
+	// --- UPDATE ADDRESS DATABASE ---
+	// Get or create address data
+	addrData, err := h.getOrCreateAddressData(ev.PID)
+	if err != nil {
+		return fmt.Errorf("failed to get address data: %w", err)
+	}
+
+	// Add page offset directly to AddressData
+	addrData.AddPageOffset(ev.TID, r.StartVal, pageOffset, "INIT")
+
+	// Save AddressData
+	addrKey := fmt.Sprintf("%d", ev.PID)
+	if err := h.addressDB.Upsert(addrKey, addrData); err != nil {
+		return fmt.Errorf("failed to upsert address data: %w", err)
+	}
+
+	// --- UPDATE MAIN DATABASE ---
+	// Get counts from AddressData and update ProcessData
+	counts := addrData.GetStatusCounts(ev.TID, r.StartVal)
+
+	// Update counts in ProcessData
+	if r.Statuses == nil {
+		r.Statuses = make(map[string]*data.StatusCount)
+	}
+	for status, count := range counts {
+		if r.Statuses[status] == nil {
+			r.Statuses[status] = &data.StatusCount{}
+		}
+		r.Statuses[status].Count = count
+	}
+
+	// Save ProcessData
+	key := fmt.Sprintf("%d", ev.PID)
+	if err := h.db.Upsert(key, record); err != nil {
+		return fmt.Errorf("failed to upsert process: %w", err)
+	}
+
+	return nil
 }
 
 // HandleSwapEvent handles swap events for a process
@@ -183,8 +289,61 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 	}
 
 	record := &records[0]
-	record.AddSwapStatus(ev.TID, ev.Address, ev.IsSwap)
-	return h.UpsertProcess(ev.PID, record)
+
+	// Calculate page address and offset
+	pageAddr := (ev.Address / data.PageSizeBytes) * data.PageSizeBytes
+
+	// Find the range containing this address
+	r := record.FindRangeForAddr(ev.TID, pageAddr)
+	if r == nil {
+		// Range not found - this shouldn't happen but handle gracefully
+		return nil
+	}
+
+	pageOffset := (pageAddr - r.StartVal) / data.PageSizeBytes
+
+	// --- UPDATE ADDRESS DATABASE ---
+	// Get or create address data
+	addrData, err := h.getOrCreateAddressData(ev.PID)
+	if err != nil {
+		return fmt.Errorf("failed to get address data: %w", err)
+	}
+
+	// Add page offset directly to AddressData with appropriate status
+	if ev.IsSwap {
+		addrData.AddPageOffset(ev.TID, r.StartVal, pageOffset, "SWAP")
+	} else {
+		addrData.AddPageOffset(ev.TID, r.StartVal, pageOffset, "UNSWAP")
+	}
+
+	// Save AddressData
+	addrKey := fmt.Sprintf("%d", ev.PID)
+	if err := h.addressDB.Upsert(addrKey, addrData); err != nil {
+		return fmt.Errorf("failed to upsert address data: %w", err)
+	}
+
+	// --- UPDATE MAIN DATABASE ---
+	// Get counts from AddressData and update ProcessData
+	counts := addrData.GetStatusCounts(ev.TID, r.StartVal)
+
+	// Update counts in ProcessData
+	if r.Statuses == nil {
+		r.Statuses = make(map[string]*data.StatusCount)
+	}
+	for status, count := range counts {
+		if r.Statuses[status] == nil {
+			r.Statuses[status] = &data.StatusCount{}
+		}
+		r.Statuses[status].Count = count
+	}
+
+	// Save ProcessData
+	key := fmt.Sprintf("%d", ev.PID)
+	if err := h.db.Upsert(key, record); err != nil {
+		return fmt.Errorf("failed to upsert process: %w", err)
+	}
+
+	return nil
 }
 
 // LoadSmapsForProcess loads memory ranges from /proc/PID/smaps for a process
@@ -213,5 +372,12 @@ func (h *DBHelper) LoadSmapsForProcess(pid int) error {
 		record.Threads = threads
 	}
 
-	return h.UpsertProcess(pid, record)
+	// Save ProcessData (just structure, no Value)
+	key := fmt.Sprintf("%d", pid)
+	if err := h.db.Upsert(key, record); err != nil {
+		return fmt.Errorf("failed to upsert process: %w", err)
+	}
+
+	// AddressData will be populated when first page fault/swap occurs
+	return nil
 }

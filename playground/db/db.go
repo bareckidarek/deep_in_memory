@@ -15,7 +15,14 @@ import (
 )
 
 func main() {
-    db, err := bbolt.Open("../../deep_in_memory.db", 0600, nil)
+    readDatabase("../../deep_in_memory.db")
+    fmt.Printf("\n\n\n\n\n")
+    readDatabase("../../deep_in_memory_addresses.db")
+
+}
+
+func readDatabase(dbname string) {
+        db, err := bbolt.Open(dbname, 0600, nil)
     if err != nil {
         log.Fatal(err)
     }

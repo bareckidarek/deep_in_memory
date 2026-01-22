@@ -19,6 +19,7 @@ type refreshMsg struct{}
 type Model struct {
 	ui              *uimodel.Model
 	db              storedb.Db[data.ProcessData]
+	addressDB       storedb.Db[data.AddressData]
 	dbHelper        *DBHelper
 	refreshInterval time.Duration
 	logAggregator   *LogAggregator
@@ -28,11 +29,12 @@ type Model struct {
 // New creates the main application model that coordinates UI, database, and eBPF collectors.
 // Manages periodic dataset refresh and routes events between eBPF collectors and the UI.
 // The refresh interval controls how often the UI updates with new process data.
-func New(db storedb.Db[data.ProcessData], initial data.Dataset, refresh time.Duration) *Model {
+func New(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.AddressData], initial data.Dataset, refresh time.Duration) *Model {
 	return &Model{
 		ui:              uimodel.New(initial),
 		db:              db,
-		dbHelper:        NewDBHelper(db, nil), // Will be set later
+		addressDB:       addressDB,
+		dbHelper:        NewDBHelper(db, addressDB, nil), // Will be set later
 		refreshInterval: refresh,
 		logAggregator:   NewLogAggregator(),
 		targetPID:       0,
@@ -167,7 +169,7 @@ func (m *Model) View() tea.View {
 }
 
 func (m *Model) reload() {
-	procs, err := m.db.All()
+	procs, err := m.dbHelper.db.All()
 	if err != nil {
 		// Don't crash the UI, just continue with empty dataset
 		m.ui.SetDataset(data.Dataset{Processes: make(map[int]*data.ProcessData), Order: []int{}})
