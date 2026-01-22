@@ -19,25 +19,18 @@ func init() {
 	PageSizeBytes = uint64(syscall.Getpagesize())
 }
 
-// Process mirrors a process definition.
-type Process struct {
-	PID       int
-	Name      string
-	StartTime time.Time
-}
-
-// RangeCache provides fast lookup of address ranges for page faults and swap events
-type RangeCache struct {
-	Ranges     []*AddrRange // Pointers to ranges for fast iteration
-	StartVals  []uint64     // Corresponding start addresses for binary search
-	LastUpdate time.Time    // When cache was last updated
-}
-
 // ProcessData aggregates all data for a single process.
 type ProcessData struct {
 	Proc       Process
 	Threads    []ThreadData
 	rangeCache map[int]*RangeCache // TID -> RangeCache for fast lookups
+}
+
+// Process mirrors a process definition.
+type Process struct {
+	PID       int
+	Name      string
+	StartTime time.Time
 }
 
 // ThreadData stores thread-level virtual ranges.
@@ -46,10 +39,28 @@ type ThreadData struct {
 	Ranges []AddrRange
 }
 
+// AddrRange represents a virtual address range and statuses.
+type AddrRange struct {
+	Start    string
+	End      string
+	StartVal uint64
+	EndVal   uint64
+	Size     uint64
+	Statuses map[string]*StatusCount
+	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
+}
+
 // StatusCount tracks count and list of page offsets in a particular status.
 type StatusCount struct {
 	Count int      `json:"count"`
 	Value []uint64 `json:"value,omitempty"` // List of page offsets (in pages, not bytes) from range start
+}
+
+// RangeCache provides fast lookup of address ranges for page faults and swap events
+type RangeCache struct {
+	Ranges     []*AddrRange // Pointers to ranges for fast iteration
+	StartVals  []uint64     // Corresponding start addresses for binary search
+	LastUpdate time.Time    // When cache was last updated
 }
 
 // addPageToStatus adds a page offset to a specific status.
@@ -101,44 +112,6 @@ func (r *AddrRange) removePageFromStatus(pageOffset uint64, status string) {
 			return
 		}
 	}
-}
-
-// incrementStatus increments the count for a given status in the range.
-// Deprecated: Use addPageToStatus instead.
-func (r *AddrRange) incrementStatus(status string) {
-	if r.Statuses == nil {
-		r.Statuses = make(map[string]*StatusCount)
-	}
-	if r.Statuses[status] == nil {
-		r.Statuses[status] = &StatusCount{Value: []uint64{}}
-	}
-	r.Statuses[status].Count++
-}
-
-// decrementStatus decrements the count for a given status in the range.
-// If count goes below 0, it's clamped to 0.
-// Deprecated: Use removePageFromStatus instead.
-func (r *AddrRange) decrementStatus(status string) {
-	if r.Statuses == nil {
-		return
-	}
-	if r.Statuses[status] != nil {
-		r.Statuses[status].Count--
-		if r.Statuses[status].Count < 0 {
-			r.Statuses[status].Count = 0
-		}
-	}
-}
-
-// AddrRange represents a virtual address range and statuses.
-type AddrRange struct {
-	Start    string
-	End      string
-	StartVal uint64
-	EndVal   uint64
-	Size     uint64
-	Statuses map[string]*StatusCount
-	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
 }
 
 // SortRanges orders address ranges for consistent display in the UI.
@@ -457,8 +430,10 @@ func (pd *ProcessData) AddPageFault(tid int, faultAddr uint64) {
 	// Use optimized range lookup instead of O(n) linear search
 	r := pd.findRangeForAddr(tid, pageAddr)
 	if r != nil {
-		// Found the range - increment INIT count
-		r.incrementStatus("INIT")
+		// Calculate page offset from range start
+		pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
+		// Add page to INIT status (automatically removes from other statuses)
+		r.addPageToStatus(pageOffset, "INIT")
 	}
 }
 
@@ -469,22 +444,21 @@ func (pd *ProcessData) AddSwapStatus(tid int, swapAddr uint64, isSwap bool) {
 		return
 	}
 
+	// Calculate page address (align to page boundary)
+	pageAddr := (swapAddr / PageSizeBytes) * PageSizeBytes
+
 	// Use optimized range lookup instead of O(n) linear search
-	r := pd.findRangeForAddr(tid, swapAddr)
+	r := pd.findRangeForAddr(tid, pageAddr)
 	if r != nil {
+		// Calculate page offset from range start
+		pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
 		// Found the range
 		if isSwap {
-			// swap_writepage: SWAP++, INIT--
-			r.incrementStatus("SWAP")
-			r.decrementStatus("INIT")
+			// swap_writepage: move page to SWAP status
+			r.addPageToStatus(pageOffset, "SWAP")
 		} else {
-			// do_swap_page: UNSWAP++, SWAP--
-			r.incrementStatus("UNSWAP")
-			r.decrementStatus("SWAP")
-			// If SWAP went to 0, also decrement INIT
-			if r.Statuses != nil && r.Statuses["SWAP"] != nil && r.Statuses["SWAP"].Count <= 0 {
-				r.decrementStatus("INIT")
-			}
+			// do_swap_page: move page to UNSWAP status
+			r.addPageToStatus(pageOffset, "UNSWAP")
 		}
 	}
 }
