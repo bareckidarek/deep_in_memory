@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -26,6 +27,8 @@ import (
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	clearDatabases()
 
 	store, err := storedb.New[data.ProcessData]("deep_in_memory")
 	if err != nil {
@@ -133,32 +136,7 @@ func main() {
 	}
 }
 
-func clearDatabase(store storedb.Db[data.ProcessData]) error {
-	allProcs, err := store.All()
-	if err != nil {
-		return err
-	}
-	for _, proc := range allProcs {
-		key := fmt.Sprintf("%d", proc.Proc.PID)
-		if err := store.Delete(key); err != nil {
-			// Report delete failure but continue with other processes
-			fmt.Printf("Warning: failed to delete process %d from database: %v\n", proc.Proc.PID, err)
-		}
-	}
-	return nil
-}
-
-func clearAddressDatabase(store storedb.Db[data.AddressData]) error {
-	allData, err := store.All()
-	if err != nil {
-		return err
-	}
-	for _, addrData := range allData {
-		key := fmt.Sprintf("%d", addrData.PID)
-		if err := store.Delete(key); err != nil {
-			// Report delete failure but continue with other processes
-			fmt.Printf("Warning: failed to delete address data %d from database: %v\n", addrData.PID, err)
-		}
-	}
-	return nil
+func clearDatabases() {
+	os.Remove("./deep_in_memory.db")
+	os.Remove("./deep_in_memory_addresses.db")
 }

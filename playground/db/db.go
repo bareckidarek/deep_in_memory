@@ -15,13 +15,13 @@ import (
 )
 
 func main() {
-    readDatabase("../../deep_in_memory.db")
+    readDatabase("./deep_in_memory.db", data.ProcessData{})
     fmt.Printf("\n\n\n\n\n")
-    readDatabase("../../deep_in_memory_addresses.db")
+    readDatabase("./deep_in_memory_addresses.db", data.AddressData{})
 
 }
 
-func readDatabase(dbname string) {
+func readDatabase[T data.ProcessData | data.AddressData](dbname string, t T) {
         db, err := bbolt.Open(dbname, 0600, nil)
     if err != nil {
         log.Fatal(err)
@@ -35,7 +35,7 @@ func readDatabase(dbname string) {
             bucketData := make(map[string]interface{})
             b.ForEach(func(k, v []byte) error {
                 // Odszyfruj ProcessData z binariów
-                var pd data.ProcessData
+                var pd T
                 dec := gob.NewDecoder(bytes.NewReader(v))
                 if err := dec.Decode(&pd); err != nil {
                     // Jeśli nie uda się zdekodować, pokaż surową wartość jako string

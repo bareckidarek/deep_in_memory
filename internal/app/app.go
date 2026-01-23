@@ -18,8 +18,6 @@ type refreshMsg struct{}
 // Model wraps the UI model with persistence-backed refresh.
 type Model struct {
 	ui              *uimodel.Model
-	db              storedb.Db[data.ProcessData]
-	addressDB       storedb.Db[data.AddressData]
 	dbHelper        *DBHelper
 	refreshInterval time.Duration
 	logAggregator   *LogAggregator
@@ -32,8 +30,6 @@ type Model struct {
 func New(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.AddressData], initial data.Dataset, refresh time.Duration) *Model {
 	return &Model{
 		ui:              uimodel.New(initial),
-		db:              db,
-		addressDB:       addressDB,
 		dbHelper:        NewDBHelper(db, addressDB, nil), // Will be set later
 		refreshInterval: refresh,
 		logAggregator:   NewLogAggregator(),
