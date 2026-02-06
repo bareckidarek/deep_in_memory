@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -27,23 +28,24 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	clearDatabases()
+
 	store, err := storedb.New[data.ProcessData]("deep_in_memory")
 	if err != nil {
 		log.Fatalf("failed to open bolt db: %v", err)
 	}
 	defer store.Close()
 
-	// Clear database on startup for fresh state
-	if err := clearDatabase(store); err != nil {
-		log.Fatalf("failed to clear database: %v", err)
-	}
-
-	initialProcs, err := store.All()
+	addressStore, err := storedb.New[data.AddressData]("deep_in_memory_addresses")
 	if err != nil {
-		log.Fatalf("failed to read initial data: %v", err)
+		log.Fatalf("failed to open address bolt db: %v", err)
 	}
+	defer addressStore.Close()
+
+	initialProcs, _ := store.All()
+
 	initial := data.BuildDataset(initialProcs)
-	appModel := app.New(store, initial, constants.DefaultRefreshInterval)
+	appModel := app.New(store, addressStore, initial, constants.DefaultRefreshInterval)
 	p := tea.NewProgram(appModel)
 
 	// Start sched collector and get the shared state
@@ -124,8 +126,8 @@ func main() {
 	// Set error callback for database operations
 	appModel.SetErrorCallback(func(err error) {
 		p.Send(uimsg.ApplicationError{
-			Message:  err.Error(),
-			Severity: "info",
+			Message:  fmt.Sprintf("Database error: %v", err),
+			Severity: "error",
 		})
 	})
 
@@ -134,17 +136,7 @@ func main() {
 	}
 }
 
-func clearDatabase(store storedb.Db[data.ProcessData]) error {
-	allProcs, err := store.All()
-	if err != nil {
-		return err
-	}
-	for _, proc := range allProcs {
-		key := fmt.Sprintf("%d", proc.Proc.PID)
-		if err := store.Delete(key); err != nil {
-			// Report delete failure but continue with other processes
-			fmt.Printf("Warning: failed to delete process %d from database: %v\n", proc.Proc.PID, err)
-		}
-	}
-	return nil
+func clearDatabases() {
+	os.Remove("./deep_in_memory.db")
+	os.Remove("./deep_in_memory_addresses.db")
 }

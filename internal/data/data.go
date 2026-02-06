@@ -19,6 +19,13 @@ func init() {
 	PageSizeBytes = uint64(syscall.Getpagesize())
 }
 
+// ProcessData aggregates all data for a single process.
+type ProcessData struct {
+	Proc       Process
+	Threads    []ThreadData
+	rangeCache map[int]*RangeCache // TID -> RangeCache for fast lookups
+}
+
 // Process mirrors a process definition.
 type Process struct {
 	PID       int
@@ -26,22 +33,236 @@ type Process struct {
 	StartTime time.Time
 }
 
-// VirtualPage tracks virtual address lifecycle.
-type VirtualPage struct {
-	Address   string
-	PFN       string
-	Phase     string
-	LastEvent string
-	SeenAt    time.Time
-	UpdatedAt time.Time
+// ThreadData stores thread-level virtual ranges.
+type ThreadData struct {
+	TID    int
+	Ranges []AddrRange
 }
 
-// PFNState tracks PFN lifecycle.
-type PFNState struct {
-	PFN       string
-	Phase     string
-	Virtuals  map[string]bool
-	UpdatedAt time.Time
+// AddrRange represents a virtual address range and statuses.
+type AddrRange struct {
+	Start    string
+	End      string
+	StartVal uint64
+	EndVal   uint64
+	Size     uint64
+	Statuses map[string]*StatusCount
+	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
+}
+
+// StatusCount tracks count of pages in a particular status.
+// Page offsets are stored separately in AddressData in the address database.
+type StatusCount struct {
+	Count int `json:"count"`
+}
+
+// AddressData stores page offsets for a process in a separate database.
+// This keeps the main ProcessData lightweight for UI rendering.
+type AddressData struct {
+	PID     int                 `json:"pid"`
+	Threads []ThreadAddressData `json:"threads"`
+}
+
+// ThreadAddressData stores page offsets for a thread's memory ranges.
+type ThreadAddressData struct {
+	TID    int                `json:"tid"`
+	Ranges []RangeAddressData `json:"ranges"`
+}
+
+// RangeAddressData stores page offsets for a specific memory range.
+// Identified by StartVal to match with AddrRange in main database.
+type RangeAddressData struct {
+	StartVal uint64                    `json:"start_val"` // Identifies the range
+	Statuses map[string]*StatusOffsets `json:"statuses"`  // Status -> page offsets
+}
+
+// StatusOffsets contains only the page offset values.
+type StatusOffsets struct {
+	Value []uint64 `json:"value"` // List of page offsets (in pages, not bytes) from range start
+}
+
+// AddPageOffset adds a page offset to a specific status in AddressData.
+// Operates directly on AddressData structure without touching ProcessData.
+func (ad *AddressData) AddPageOffset(tid int, rangeStartVal uint64, pageOffset uint64, status string) {
+	if ad.Threads == nil {
+		ad.Threads = []ThreadAddressData{}
+	}
+
+	// Find or create thread
+	var targetThread *ThreadAddressData
+	for i := range ad.Threads {
+		if ad.Threads[i].TID == tid {
+			targetThread = &ad.Threads[i]
+			break
+		}
+	}
+
+	if targetThread == nil {
+		ad.Threads = append(ad.Threads, ThreadAddressData{
+			TID:    tid,
+			Ranges: []RangeAddressData{},
+		})
+		targetThread = &ad.Threads[len(ad.Threads)-1]
+	}
+
+	// Find or create range
+	var targetRange *RangeAddressData
+	for i := range targetThread.Ranges {
+		if targetThread.Ranges[i].StartVal == rangeStartVal {
+			targetRange = &targetThread.Ranges[i]
+			break
+		}
+	}
+
+	if targetRange == nil {
+		targetThread.Ranges = append(targetThread.Ranges, RangeAddressData{
+			StartVal: rangeStartVal,
+			Statuses: make(map[string]*StatusOffsets),
+		})
+		targetRange = &targetThread.Ranges[len(targetThread.Ranges)-1]
+	}
+
+	if targetRange.Statuses == nil {
+		targetRange.Statuses = make(map[string]*StatusOffsets)
+	}
+
+	// Remove page from all other statuses first (a page can only be in one status)
+	for otherStatus := range targetRange.Statuses {
+		if otherStatus != status {
+			ad.removePageOffsetFromStatus(targetRange, pageOffset, otherStatus)
+		}
+	}
+
+	// Initialize status if needed
+	if targetRange.Statuses[status] == nil {
+		targetRange.Statuses[status] = &StatusOffsets{Value: []uint64{}}
+	}
+
+	// Check if page already exists in this status
+	for _, offset := range targetRange.Statuses[status].Value {
+		if offset == pageOffset {
+			return // Already in this status
+		}
+	}
+
+	// Add page to status
+	targetRange.Statuses[status].Value = append(targetRange.Statuses[status].Value, pageOffset)
+}
+
+// removePageOffsetFromStatus removes a page offset from a specific status in a range
+func (ad *AddressData) removePageOffsetFromStatus(r *RangeAddressData, pageOffset uint64, status string) {
+	if r.Statuses == nil || r.Statuses[status] == nil {
+		return
+	}
+
+	// Find and remove page
+	for i, offset := range r.Statuses[status].Value {
+		if offset == pageOffset {
+			// Remove by swapping with last element and truncating
+			lastIdx := len(r.Statuses[status].Value) - 1
+			r.Statuses[status].Value[i] = r.Statuses[status].Value[lastIdx]
+			r.Statuses[status].Value = r.Statuses[status].Value[:lastIdx]
+			return
+		}
+	}
+}
+
+// GetStatusCounts returns counts for all statuses in a specific range.
+// Used to sync Count values to ProcessData.
+func (ad *AddressData) GetStatusCounts(tid int, rangeStartVal uint64) map[string]int {
+	counts := make(map[string]int)
+
+	// Find thread
+	for _, thread := range ad.Threads {
+		if thread.TID != tid {
+			continue
+		}
+
+		// Find range
+		for _, r := range thread.Ranges {
+			if r.StartVal == rangeStartVal {
+				// Count values in each status
+				for status, offsets := range r.Statuses {
+					counts[status] = len(offsets.Value)
+				}
+				return counts
+			}
+		}
+	}
+
+	return counts
+}
+
+// MergeInto merges this AddressData into target AddressData.
+// This is used to update existing address data with new offsets without losing old ones.
+func (ad *AddressData) MergeInto(target *AddressData) {
+	if ad == nil || target == nil {
+		return
+	}
+
+	// Ensure target has PID set
+	if target.PID == 0 {
+		target.PID = ad.PID
+	}
+
+	if target.Threads == nil {
+		target.Threads = []ThreadAddressData{}
+	}
+
+	// For each thread in source
+	for _, srcThread := range ad.Threads {
+		// Find or create matching thread in target
+		var targetThread *ThreadAddressData
+		for i := range target.Threads {
+			if target.Threads[i].TID == srcThread.TID {
+				targetThread = &target.Threads[i]
+				break
+			}
+		}
+
+		if targetThread == nil {
+			// Create new thread in target
+			target.Threads = append(target.Threads, ThreadAddressData{
+				TID:    srcThread.TID,
+				Ranges: []RangeAddressData{},
+			})
+			targetThread = &target.Threads[len(target.Threads)-1]
+		}
+
+		// For each range in source thread
+		for _, srcRange := range srcThread.Ranges {
+			// Find or create matching range in target
+			var targetRange *RangeAddressData
+			for i := range targetThread.Ranges {
+				if targetThread.Ranges[i].StartVal == srcRange.StartVal {
+					targetRange = &targetThread.Ranges[i]
+					break
+				}
+			}
+
+			if targetRange == nil {
+				// Create new range in target
+				targetThread.Ranges = append(targetThread.Ranges, RangeAddressData{
+					StartVal: srcRange.StartVal,
+					Statuses: make(map[string]*StatusOffsets),
+				})
+				targetRange = &targetThread.Ranges[len(targetThread.Ranges)-1]
+			}
+
+			// Merge statuses
+			for status, srcOffsets := range srcRange.Statuses {
+				if targetRange.Statuses == nil {
+					targetRange.Statuses = make(map[string]*StatusOffsets)
+				}
+
+				// Simply replace - ExtractAddressData already has the complete current state
+				targetRange.Statuses[status] = &StatusOffsets{
+					Value: make([]uint64, len(srcOffsets.Value)),
+				}
+				copy(targetRange.Statuses[status].Value, srcOffsets.Value)
+			}
+		}
+	}
 }
 
 // RangeCache provides fast lookup of address ranges for page faults and swap events
@@ -51,28 +272,7 @@ type RangeCache struct {
 	LastUpdate time.Time    // When cache was last updated
 }
 
-// ProcessData aggregates all data for a single process.
-type ProcessData struct {
-	Proc       Process
-	Virtual    map[string]*VirtualPage
-	PFNs       map[string]*PFNState
-	Threads    []ThreadData
-	rangeCache map[int]*RangeCache // TID -> RangeCache for fast lookups
-}
-
-// ThreadData stores thread-level virtual ranges.
-type ThreadData struct {
-	TID    int
-	Ranges []AddrRange
-}
-
-// StatusCount tracks count and list of page offsets in a particular status.
-type StatusCount struct {
-	Count int      `json:"count"`
-	Value []uint64 `json:"value,omitempty"` // List of page offsets (in pages, not bytes) from range start
-}
-
-// addPageToStatus adds a page offset to a specific status.
+// addPageToStatus increments the count for a specific status.
 // The page is removed from all other statuses first (a page can only be in one status).
 // pageOffset is in pages (not bytes) from the range start.
 func (r *AddrRange) addPageToStatus(pageOffset uint64, status string) {
@@ -89,76 +289,23 @@ func (r *AddrRange) addPageToStatus(pageOffset uint64, status string) {
 
 	// Initialize status if needed
 	if r.Statuses[status] == nil {
-		r.Statuses[status] = &StatusCount{Value: []uint64{}}
+		r.Statuses[status] = &StatusCount{}
 	}
 
-	// Check if page already exists in this status
-	for _, offset := range r.Statuses[status].Value {
-		if offset == pageOffset {
-			return // Already in this status
-		}
-	}
-
-	// Add page to status
-	r.Statuses[status].Value = append(r.Statuses[status].Value, pageOffset)
-	r.Statuses[status].Count = len(r.Statuses[status].Value)
+	// Increment count
+	r.Statuses[status].Count++
 }
 
-// removePageFromStatus removes a page offset from a specific status.
+// removePageFromStatus decrements the count for a specific status.
 func (r *AddrRange) removePageFromStatus(pageOffset uint64, status string) {
 	if r.Statuses == nil || r.Statuses[status] == nil {
 		return
 	}
 
-	// Find and remove page
-	for i, offset := range r.Statuses[status].Value {
-		if offset == pageOffset {
-			// Remove by swapping with last element and truncating
-			lastIdx := len(r.Statuses[status].Value) - 1
-			r.Statuses[status].Value[i] = r.Statuses[status].Value[lastIdx]
-			r.Statuses[status].Value = r.Statuses[status].Value[:lastIdx]
-			r.Statuses[status].Count = len(r.Statuses[status].Value)
-			return
-		}
-	}
-}
-
-// incrementStatus increments the count for a given status in the range.
-// Deprecated: Use addPageToStatus instead.
-func (r *AddrRange) incrementStatus(status string) {
-	if r.Statuses == nil {
-		r.Statuses = make(map[string]*StatusCount)
-	}
-	if r.Statuses[status] == nil {
-		r.Statuses[status] = &StatusCount{Value: []uint64{}}
-	}
-	r.Statuses[status].Count++
-}
-
-// decrementStatus decrements the count for a given status in the range.
-// If count goes below 0, it's clamped to 0.
-// Deprecated: Use removePageFromStatus instead.
-func (r *AddrRange) decrementStatus(status string) {
-	if r.Statuses == nil {
-		return
-	}
-	if r.Statuses[status] != nil {
+	// Decrement count (but don't go below 0)
+	if r.Statuses[status].Count > 0 {
 		r.Statuses[status].Count--
-		if r.Statuses[status].Count < 0 {
-			r.Statuses[status].Count = 0
-		}
 	}
-}
-
-// AddrRange represents a virtual address range and statuses.
-type AddrRange struct {
-	Start    string
-	End      string
-	StartVal uint64
-	EndVal   uint64
-	Size     uint64
-	Statuses map[string]*StatusCount
-	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
 }
 
 // SortRanges orders address ranges for consistent display in the UI.
@@ -270,10 +417,10 @@ func (pd *ProcessData) rebuildRangeCache(tid int) {
 	cache.LastUpdate = time.Now()
 }
 
-// findRangeForAddr efficiently locates the virtual address range containing a specific address.
+// FindRangeForAddr efficiently locates the virtual address range containing a specific address.
 // Uses a cached binary search for O(log n) lookup performance, rebuilding the cache
 // if it's stale or doesn't exist. Returns nil if no range contains the address.
-func (pd *ProcessData) findRangeForAddr(tid int, addr uint64) *AddrRange {
+func (pd *ProcessData) FindRangeForAddr(tid int, addr uint64) *AddrRange {
 	cache := pd.getRangeCache(tid)
 
 	// Rebuild cache if stale or empty
@@ -475,10 +622,12 @@ func (pd *ProcessData) AddPageFault(tid int, faultAddr uint64) {
 	pageAddr := (faultAddr / PageSizeBytes) * PageSizeBytes
 
 	// Use optimized range lookup instead of O(n) linear search
-	r := pd.findRangeForAddr(tid, pageAddr)
+	r := pd.FindRangeForAddr(tid, pageAddr)
 	if r != nil {
-		// Found the range - increment INIT count
-		r.incrementStatus("INIT")
+		// Calculate page offset from range start
+		pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
+		// Add page to INIT status (automatically removes from other statuses)
+		r.addPageToStatus(pageOffset, "INIT")
 	}
 }
 
@@ -489,22 +638,21 @@ func (pd *ProcessData) AddSwapStatus(tid int, swapAddr uint64, isSwap bool) {
 		return
 	}
 
+	// Calculate page address (align to page boundary)
+	pageAddr := (swapAddr / PageSizeBytes) * PageSizeBytes
+
 	// Use optimized range lookup instead of O(n) linear search
-	r := pd.findRangeForAddr(tid, swapAddr)
+	r := pd.FindRangeForAddr(tid, pageAddr)
 	if r != nil {
+		// Calculate page offset from range start
+		pageOffset := (pageAddr - r.StartVal) / PageSizeBytes
 		// Found the range
 		if isSwap {
-			// swap_writepage: SWAP++, INIT--
-			r.incrementStatus("SWAP")
-			r.decrementStatus("INIT")
+			// swap_writepage: move page to SWAP status
+			r.addPageToStatus(pageOffset, "SWAP")
 		} else {
-			// do_swap_page: UNSWAP++, SWAP--
-			r.incrementStatus("UNSWAP")
-			r.decrementStatus("SWAP")
-			// If SWAP went to 0, also decrement INIT
-			if r.Statuses != nil && r.Statuses["SWAP"] != nil && r.Statuses["SWAP"].Count <= 0 {
-				r.decrementStatus("INIT")
-			}
+			// do_swap_page: move page to UNSWAP status
+			r.addPageToStatus(pageOffset, "UNSWAP")
 		}
 	}
 }
@@ -547,13 +695,6 @@ func BuildDataset(processes []ProcessData) Dataset {
 	for i := range processes {
 		p := processes[i]
 		pid := p.Proc.PID
-		// ensure maps are non-nil to avoid nil deref in UI
-		if p.Virtual == nil {
-			p.Virtual = make(map[string]*VirtualPage)
-		}
-		if p.PFNs == nil {
-			p.PFNs = make(map[string]*PFNState)
-		}
 		ds.Processes[pid] = &p
 		ds.Order = append(ds.Order, pid)
 	}
@@ -601,9 +742,8 @@ func LoadData(path string) (Dataset, error) {
 	// Initialize all processes from the input data.
 	for pid, proc := range procMap {
 		ds.Processes[pid] = &ProcessData{
-			Proc:    proc,
-			Virtual: make(map[string]*VirtualPage),
-			PFNs:    make(map[string]*PFNState),
+			Proc: proc,
+
 			Threads: threadMap[pid],
 		}
 		ds.Order = append(ds.Order, pid)

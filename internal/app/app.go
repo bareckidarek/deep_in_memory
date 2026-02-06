@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -18,7 +19,6 @@ type refreshMsg struct{}
 // Model wraps the UI model with persistence-backed refresh.
 type Model struct {
 	ui              *uimodel.Model
-	db              storedb.Db[data.ProcessData]
 	dbHelper        *DBHelper
 	refreshInterval time.Duration
 	logAggregator   *LogAggregator
@@ -28,11 +28,10 @@ type Model struct {
 // New creates the main application model that coordinates UI, database, and eBPF collectors.
 // Manages periodic dataset refresh and routes events between eBPF collectors and the UI.
 // The refresh interval controls how often the UI updates with new process data.
-func New(db storedb.Db[data.ProcessData], initial data.Dataset, refresh time.Duration) *Model {
+func New(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.AddressData], initial data.Dataset, refresh time.Duration) *Model {
 	return &Model{
 		ui:              uimodel.New(initial),
-		db:              db,
-		dbHelper:        NewDBHelper(db, nil), // Will be set later
+		dbHelper:        NewDBHelper(db, addressDB, nil), // Will be set later
 		refreshInterval: refresh,
 		logAggregator:   NewLogAggregator(),
 		targetPID:       0,
@@ -68,9 +67,9 @@ func (m *Model) Init() tea.Cmd {
 	)
 }
 
-// Update processes incoming messages from eBPF collectors and UI.
-// Handles process lifecycle events, memory operations, and periodic refresh.
+// Update processes incoming messages from eBPF collectors and PUI.
 // Routes events to appropriate database handlers and manages application state.
+// Handles process lifecycle events, memory operations, and periodic refresh.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case uimsg.GetLogsMsg:
@@ -90,50 +89,109 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		return m, tea.Batch(cmd, nextCmd)
 	case uimsg.ProcessExec:
-		m.dbHelper.HandleProcessExec(v)
-		// Forward to UI model
-		updated, cmd := m.ui.Update(v)
-		if ui, ok := updated.(*uimodel.Model); ok {
-			m.ui = ui
+		if err := m.dbHelper.HandleProcessExec(v); err != nil {
+			return m, func() tea.Msg {
+				return uimsg.ApplicationError{
+					Message:  fmt.Sprintf("Failed to handle process exec (PID %d): %v", v.PID, err),
+					Severity: "error",
+				}
+			}
 		}
-		return m, cmd
+		// Don't update UI - it will refresh on next refreshMsg
+		return m, nil
 	case uimsg.ProcessExit:
 		m.dbHelper.HandleProcessExit(v)
-		updated, cmd := m.ui.Update(v)
-		if ui, ok := updated.(*uimodel.Model); ok {
-			m.ui = ui
+		// If we're monitoring this process, clear target PID
+		if v.PID == m.targetPID {
+			m.targetPID = 0
 		}
-		return m, cmd
+		// Don't update UI - it will refresh on next refreshMsg
+		return m, nil
 	case uimsg.ProcessMmap:
-		m.dbHelper.HandleMmapEvent(v)
+		// Ignore if no process is being monitored (stale events after process exit)
+		if m.targetPID != v.PID {
+			return m, nil
+		}
+		if err := m.dbHelper.HandleMmapEvent(v); err != nil {
+			return m, func() tea.Msg {
+				return uimsg.ApplicationError{
+					Message:  fmt.Sprintf("Failed to handle mmap event (PID %d): %v", v.PID, err),
+					Severity: "error",
+				}
+			}
+		}
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			m.logAggregator.Record("mmap", v.Addr, v.PID, v.TID)
 		}
 		return m, nil
 	case uimsg.ProcessMunmap:
-		m.dbHelper.HandleMunmapEvent(v)
+		// Ignore if no process is being monitored (stale events after process exit)
+		if m.targetPID != v.PID {
+			return m, nil
+		}
+		if err := m.dbHelper.HandleMunmapEvent(v); err != nil {
+			return m, func() tea.Msg {
+				return uimsg.ApplicationError{
+					Message:  fmt.Sprintf("Failed to handle munmap event (PID %d): %v", v.PID, err),
+					Severity: "error",
+				}
+			}
+		}
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			m.logAggregator.Record("munmap", v.Addr, v.PID, v.TID)
 		}
 		return m, nil
 	case uimsg.ProcessBrk:
-		m.dbHelper.HandleBrkEvent(v)
+		// Ignore if no process is being monitored (stale events after process exit)
+		if m.targetPID != v.PID {
+			return m, nil
+		}
+		if err := m.dbHelper.HandleBrkEvent(v); err != nil {
+			return m, func() tea.Msg {
+				return uimsg.ApplicationError{
+					Message:  fmt.Sprintf("Failed to handle brk event (PID %d): %v", v.PID, err),
+					Severity: "error",
+				}
+			}
+		}
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			m.logAggregator.Record("brk", v.Ret, v.PID, v.TID)
 		}
 		return m, nil
 	case uimsg.ProcessPageFault:
-		m.dbHelper.HandlePageFaultEvent(v)
+		// Ignore if no process is being monitored (stale events after process exit)
+		if m.targetPID != v.PID {
+			return m, nil
+		}
+		if err := m.dbHelper.HandlePageFaultEvent(v); err != nil {
+			return m, func() tea.Msg {
+				return uimsg.ApplicationError{
+					Message:  fmt.Sprintf("Failed to handle page fault event (PID %d): %v", v.PID, err),
+					Severity: "error",
+				}
+			}
+		}
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			m.logAggregator.Record("page_fault", v.Address, v.PID, v.TID)
 		}
 		return m, nil
 	case uimsg.ProcessSwapUnswap:
-		m.dbHelper.HandleSwapEvent(v)
+		// Ignore if no process is being monitored (stale events after process exit)
+		if m.targetPID != v.PID {
+			return m, nil
+		}
+		if err := m.dbHelper.HandleSwapEvent(v); err != nil {
+			return m, func() tea.Msg {
+				return uimsg.ApplicationError{
+					Message:  fmt.Sprintf("Failed to handle swap event (PID %d): %v", v.PID, err),
+					Severity: "error",
+				}
+			}
+		}
 		// Aggregate in app layer
 		if v.PID == m.targetPID {
 			if v.IsSwap {
@@ -144,11 +202,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case uimsg.LoadSmapsRequest:
-		m.dbHelper.LoadSmapsForProcess(v.PID)
+		if err := m.dbHelper.LoadSmapsForProcess(v.PID); err != nil {
+			return m, func() tea.Msg {
+				return uimsg.ApplicationError{
+					Message:  fmt.Sprintf("Failed to load smaps (PID %d): %v", v.PID, err),
+					Severity: "error",
+				}
+			}
+		}
 		return m, nil
 	case uimsg.ApplicationError:
 		// Forward error to UI model for display
-		return m, nil
+		updated, cmd := m.ui.Update(v)
+		if ui, ok := updated.(*uimodel.Model); ok {
+			m.ui = ui
+		}
+		return m, cmd
+	case uimsg.HideModalMsg:
+		// Forward modal hide to UI
+		updated, cmd := m.ui.Update(v)
+		if ui, ok := updated.(*uimodel.Model); ok {
+			m.ui = ui
+		}
+		return m, cmd
 	case refreshMsg:
 		m.reload()
 		return m, tea.Tick(m.refreshInterval, func(time.Time) tea.Msg { return refreshMsg{} })
@@ -167,9 +243,10 @@ func (m *Model) View() tea.View {
 }
 
 func (m *Model) reload() {
-	procs, err := m.db.All()
+	procs, err := m.dbHelper.db.All()
 	if err != nil {
-		// Don't crash the UI, just continue with empty dataset
+		// Report error to UI but don't crash - continue with empty dataset
+		m.dbHelper.reportError(fmt.Errorf("failed to reload database: %w", err))
 		m.ui.SetDataset(data.Dataset{Processes: make(map[int]*data.ProcessData), Order: []int{}})
 		return
 	}

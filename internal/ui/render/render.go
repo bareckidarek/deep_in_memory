@@ -3,7 +3,6 @@ package render
 import (
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -11,17 +10,6 @@ import (
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
 )
-
-// ActiveVirtualCount returns the number of non-freed virtual pages.
-func ActiveVirtualCount(vmap map[string]*data.VirtualPage) int {
-	count := 0
-	for _, vp := range vmap {
-		if vp.Phase != "freed" {
-			count++
-		}
-	}
-	return count
-}
 
 // TotalVirtualPages returns the total number of virtual pages across all thread ranges.
 func TotalVirtualPages(pd *data.ProcessData) uint64 {
@@ -108,12 +96,11 @@ func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth 
 
 // RenderPhysicalSectionContent builds the physical memory section text.
 func RenderPhysicalSectionContent(pd *data.ProcessData) string {
-	phSummary := fmt.Sprintf("PFNs: %d\nPhysical usage: %s\n",
-		len(pd.PFNs), HumanBytes(int64(len(pd.PFNs))*int64(data.PageSizeBytes)))
+	phSummary := "Physical memory tracking not available\n"
 	return renderSection(
 		"[physical memory]",
 		phSummary,
-		renderMatrix("PFN", pfnKeys(pd.PFNs)),
+		"",
 	)
 }
 
@@ -496,58 +483,6 @@ func renderMatrix(label string, entries []string) string {
 	}
 
 	return b.String()
-}
-
-func renderPhases(vmap map[string]*data.VirtualPage) string {
-	if len(vmap) == 0 {
-		return "No virtual addresses tracked."
-	}
-	// Group addresses by phase for quick inspection.
-	buckets := map[string][]string{}
-	for addr, vp := range vmap {
-		phase := vp.Phase
-		if phase == "" {
-			phase = "unknown"
-		}
-		buckets[phase] = append(buckets[phase], addr)
-	}
-	for _, list := range buckets {
-		sort.Strings(list)
-	}
-
-	var b strings.Builder
-	b.WriteString("Lifecycle phases:\n")
-	phases := []string{"created", "initialized", "swapped", "recovered", "freed", "unknown"}
-	for _, ph := range phases {
-		addrs := buckets[ph]
-		if len(addrs) == 0 {
-			continue
-		}
-		samples := addrs
-		if len(addrs) > constants.PhaseSampleLimit {
-			samples = addrs[:constants.PhaseSampleLimit]
-		}
-		b.WriteString(fmt.Sprintf("- %s: %d (e.g., %s)\n", ph, len(addrs), strings.Join(samples, ", ")))
-	}
-	return b.String()
-}
-
-func virtualKeys(vmap map[string]*data.VirtualPage) []string {
-	keys := make([]string, 0, len(vmap))
-	for k := range vmap {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func pfnKeys(pmap map[string]*data.PFNState) []string {
-	keys := make([]string, 0, len(pmap))
-	for k := range pmap {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func shorten(addr string) string {
