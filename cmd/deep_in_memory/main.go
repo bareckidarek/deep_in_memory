@@ -126,8 +126,8 @@ func main() {
 	// Set error callback for database operations
 	appModel.SetErrorCallback(func(err error) {
 		p.Send(uimsg.ApplicationError{
-			Message:  err.Error(),
-			Severity: "info",
+			Message:  fmt.Sprintf("Database error: %v", err),
+			Severity: "error",
 		})
 	})
 

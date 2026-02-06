@@ -41,6 +41,7 @@ func (h *DBHelper) reportError(err error) {
 }
 
 // GetOrCreateProcess retrieves a process or creates a new one if it doesn't exist
+// Returns error if the process has already exited (prevents recreation from stale events)
 func (h *DBHelper) GetOrCreateProcess(pid int, name string) (*data.ProcessData, bool, error) {
 
 	// Try to find existing process
@@ -64,6 +65,24 @@ func (h *DBHelper) GetOrCreateProcess(pid int, name string) (*data.ProcessData, 
 	}
 
 	return record, true, nil // Created new process, isNew = true
+}
+
+// getProcess retrieves a process from database without creating it
+// Returns nil if process doesn't exist or has exited
+func (h *DBHelper) getProcess(pid int) (*data.ProcessData, error) {
+
+	// Try to find existing process
+	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(pid))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query process %d: %w", pid, err)
+	}
+
+	if len(records) > 0 {
+		return &records[0], nil
+	}
+
+	// Process not found
+	return nil, nil
 }
 
 // getOrCreateAddressData retrieves AddressData for a process or creates new one
@@ -102,6 +121,7 @@ func (h *DBHelper) UpsertProcess(pid int, record *data.ProcessData) error {
 
 // HandleProcessExec handles process execution events
 func (h *DBHelper) HandleProcessExec(ev uimsg.ProcessExec) error {
+
 	record := &data.ProcessData{
 		Proc: data.Process{
 			PID:       ev.PID,
@@ -130,10 +150,15 @@ func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 }
 
 // HandleMmapEvent handles mmap events for a process
+// Only processes existing processes - does not create new ones
 func (h *DBHelper) HandleMmapEvent(ev uimsg.ProcessMmap) error {
-	record, _, err := h.GetOrCreateProcess(ev.PID, ev.Comm)
+	record, err := h.getProcess(ev.PID)
 	if err != nil {
-		return fmt.Errorf("failed to get/create process for mmap %d: %w", ev.PID, err)
+		return fmt.Errorf("failed to get process for mmap %d: %w", ev.PID, err)
+	}
+	if record == nil {
+		// Process not found or has exited - ignore stale event
+		return nil
 	}
 
 	// Update ProcessData - add new range
@@ -150,10 +175,15 @@ func (h *DBHelper) HandleMmapEvent(ev uimsg.ProcessMmap) error {
 }
 
 // HandleBrkEvent handles brk events for a process
+// Only processes existing processes - does not create new ones
 func (h *DBHelper) HandleBrkEvent(ev uimsg.ProcessBrk) error {
-	record, _, err := h.GetOrCreateProcess(ev.PID, ev.Comm)
+	record, err := h.getProcess(ev.PID)
 	if err != nil {
-		return fmt.Errorf("failed to get/create process for brk %d: %w", ev.PID, err)
+		return fmt.Errorf("failed to get process for brk %d: %w", ev.PID, err)
+	}
+	if record == nil {
+		// Process not found or has exited - ignore stale event
+		return nil
 	}
 
 	// Update ProcessData - extend brk range
@@ -171,18 +201,15 @@ func (h *DBHelper) HandleBrkEvent(ev uimsg.ProcessBrk) error {
 
 // HandleMunmapEvent handles munmap events for a process
 func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
-	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
+	record, err := h.getProcess(ev.PID)
 	if err != nil {
 		return fmt.Errorf("failed to query process for munmap %d: %w", ev.PID, err)
 	}
 
-	if len(records) == 0 {
-		// Process not found, nothing to unmap - report but don't fail
-		h.reportError(fmt.Errorf("munmap event for unknown process PID %d (process may have exited)", ev.PID))
+	if record == nil {
+		// Process not found - ignore stale event
 		return nil
 	}
-
-	record := &records[0]
 
 	// Update ProcessData - remove range
 	record.RemoveMmapRange(ev.TID, ev.Addr, ev.Len)
@@ -205,18 +232,15 @@ func (h *DBHelper) HandlePageFaultEvent(ev uimsg.ProcessPageFault) error {
 		return nil
 	}
 
-	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
+	record, err := h.getProcess(ev.PID)
 	if err != nil {
-		return fmt.Errorf("failed to query process for page fault %d: %w", ev.PID, err)
+		return fmt.Errorf("failed to get process for page fault %d: %w", ev.PID, err)
 	}
 
-	if len(records) == 0 {
-		// Process not found for page fault - report but don't fail
-		h.reportError(fmt.Errorf("page fault event for unknown process PID %d (process may have exited)", ev.PID))
+	if record == nil {
+		// Process not found - ignore stale event
 		return nil
 	}
-
-	record := &records[0]
 
 	// Calculate page address and offset
 	pageAddr := (ev.Address / data.PageSizeBytes) * data.PageSizeBytes
@@ -277,18 +301,16 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 		return nil
 	}
 
-	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(ev.PID))
+	record, err := h.getProcess(ev.PID)
 	if err != nil {
-		return fmt.Errorf("failed to query process for swap %d: %w", ev.PID, err)
+		return fmt.Errorf("failed to get process for swap %d: %w", ev.PID, err)
 	}
 
-	if len(records) == 0 {
+	if record == nil {
 		// Process not found for swap event - report but don't fail
 		h.reportError(fmt.Errorf("swap event for unknown process PID %d (process may have exited)", ev.PID))
 		return nil
 	}
-
-	record := &records[0]
 
 	// Calculate page address and offset
 	pageAddr := (ev.Address / data.PageSizeBytes) * data.PageSizeBytes
@@ -350,23 +372,20 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 func (h *DBHelper) LoadSmapsForProcess(pid int) error {
 	threads, err := data.LoadSmapsRanges(pid)
 	if err != nil {
-		// Failed to load smaps - report but don't fail
-		h.reportError(fmt.Errorf("failed to load smaps for process %d: %w", pid, err))
+		// Failed to load smaps - ignore (process may have exited)
 		return nil
 	}
 
-	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(pid))
+	record, err := h.getProcess(pid)
 	if err != nil {
-		return fmt.Errorf("failed to query process for smaps %d: %w", pid, err)
+		return fmt.Errorf("failed to get process for smaps %d: %w", pid, err)
 	}
 
-	if len(records) == 0 {
-		// Process not found for smaps loading - report but don't fail
-		h.reportError(fmt.Errorf("process %d not found in database for smaps loading", pid))
+	if record == nil {
+		// Process not found - ignore stale request
 		return nil
 	}
 
-	record := &records[0]
 	if len(threads) > 0 {
 		// Replace or merge threads - for simplicity, replace all ranges
 		record.Threads = threads

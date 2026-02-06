@@ -120,9 +120,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case uimsg.ApplicationError:
-		// Set error for display in UI
-		m.err = fmt.Errorf("%s: %s", msg.Severity, msg.Message)
-		return m, nil
+		// Show modal based on severity
+		m.showModal = true
+		switch msg.Severity {
+		case "error":
+			m.modalType = constants.ModalTypeError
+		case "warning", "warn":
+			m.modalType = constants.ModalTypeWarn
+		default:
+			m.modalType = constants.ModalTypeInfo
+		}
+		m.modalMessage = msg.Message
+
+		// Hide modal after configured duration
+		return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
+			return uimsg.HideModalMsg{}
+		})
 	case uimsg.HideModalMsg:
 		m.showModal = false
 		return m, nil
@@ -471,7 +484,7 @@ func (m *Model) refreshList() {
 		}
 	}
 
-	// Check if selected process still exists, if not clear selection
+	// Check if selected process still exists, if not clear selection and target PID
 	if m.selectedPID != 0 {
 		found := false
 		for _, item := range items {
@@ -482,6 +495,14 @@ func (m *Model) refreshList() {
 		}
 		if !found {
 			m.selectedPID = 0 // Clear selection if process disappeared
+			// Also clear target PID in eBPF if this was the monitored process
+			if m.setTargetPID != nil {
+				if err := m.setTargetPID(0); err != nil {
+					m.showModal = true
+					m.modalType = constants.ModalTypeError
+					m.modalMessage = fmt.Sprintf("Failed to clear target PID in eBPF: %v", err)
+				}
+			}
 		}
 	}
 }
@@ -493,7 +514,9 @@ func (m *Model) applySelection(pid int, pushToEBPF bool) {
 	m.selectedPID = pid
 	if pushToEBPF && m.setTargetPID != nil {
 		if err := m.setTargetPID(pid); err != nil {
-			m.err = err
+			m.showModal = true
+			m.modalType = constants.ModalTypeError
+			m.modalMessage = fmt.Sprintf("Failed to set target PID %d in eBPF: %v", pid, err)
 		}
 	}
 	m.syncLayout()
@@ -620,7 +643,7 @@ func (m *Model) clearViewports() {
 	// Set content with styled titles
 	m.viewportVirtual.SetContent(uirender.StyleTitle("[virtual memory]") + "\n\nNo process selected.\nPress Enter on a process to view details.")
 	m.viewportPhysical.SetContent(uirender.StyleTitle("[physical memory]") + "\n\nNo process selected.")
-	m.viewportLogs.SetContent(uirender.StyleTitle("[logs]") + "\n\nNo events recorded")
+	// Don't clear logs - they persist independently of selected process
 }
 
 // renderSummary creates a formatted summary header showing process information
@@ -707,7 +730,13 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 				m.rangesPage = 0 // Reset to first page when selecting new process
 				if m.setTargetPID != nil {
 					if err := m.setTargetPID(sel.pid); err != nil {
-						m.err = err
+						m.showModal = true
+						m.modalType = constants.ModalTypeError
+						m.modalMessage = fmt.Sprintf("Failed to set target PID %d in eBPF: %v", sel.pid, err)
+						// Don't proceed with success modal
+						return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
+							return uimsg.HideModalMsg{}
+						})
 					}
 				}
 				m.syncLayout()
@@ -744,6 +773,26 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 				m.syncLayout()
 			}
 			return m, nil
+		},
+		"E": func() (tea.Model, tea.Cmd) {
+			// Test error popup (capital E for debug)
+			m.showModal = true
+			m.modalType = constants.ModalTypeError
+			m.modalMessage = "Test error message - this is a red error popup!"
+
+			return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
+				return uimsg.HideModalMsg{}
+			})
+		},
+		"W": func() (tea.Model, tea.Cmd) {
+			// Test warning popup (capital W for debug)
+			m.showModal = true
+			m.modalType = constants.ModalTypeWarn
+			m.modalMessage = "Test warning message - this is an orange warning popup!"
+
+			return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
+				return uimsg.HideModalMsg{}
+			})
 		},
 	}
 }
