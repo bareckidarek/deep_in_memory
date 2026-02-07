@@ -39,46 +39,8 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 				continue
 			}
 
-			// Filter: accept all ranges WITHOUT file paths
-			// Extract label - everything after the last column (inode or 0)
-			// Labels can contain spaces like "[anon: Go: gc bits]"
-			var label string
-
-			// Find the bracket or path after the fixed columns
-			// Format: addr permissions offset dev inode [label or /path]
-			// Need to get everything after field[4] (inode/0)
-			if len(fields) >= 6 {
-				// Reconstruct what comes after the 5th field
-				// Find position after "00:00 X" pattern
-				parts := strings.SplitN(line, " ", 6)
-				if len(parts) == 6 {
-					// parts[5] contains everything after the inode/device, with leading spaces
-					remainder := strings.TrimSpace(parts[5])
-
-					if remainder == "" {
-						// No label - anonymous memory
-						label = ""
-					} else if strings.HasPrefix(remainder, "[") {
-						// Bracketed label like [heap], [stack], [anon: Go: gc bits]
-						label = remainder
-					} else if strings.Contains(remainder, "anon") {
-						// anon_inode:bpf-map
-						label = remainder
-					} else if strings.HasPrefix(remainder, "/") {
-						// File path - TEMPORARILY show all ranges
-						label = remainder
-						// continue
-					} else {
-						// Check if it's just a number (inode)
-						if _, err := strconv.ParseUint(remainder, 10, 64); err != nil {
-							// Not a number - likely a file path without /, TEMPORARILY show all
-							label = remainder
-							// continue
-						}
-						label = ""
-					}
-				}
-			}
+			// Extract label
+			label := extractLabel(fields, line)
 
 			// Parse address range
 			addrRange := fields[0]
@@ -159,7 +121,38 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 	}, nil
 }
 
-// parseKBToPages extracts the numeric value from a line like "Rss:   12 kB"
+// extractLabel parses the label portion of a smaps header line.
+// Returns the label string (e.g. "[heap]", "/usr/lib/...", or "" for anonymous memory).
+func extractLabel(fields []string, line string) string {
+	if len(fields) < 6 {
+		return ""
+	}
+
+	// Reconstruct everything after the 5th field (inode/device).
+	parts := strings.SplitN(line, " ", 6)
+	if len(parts) < 6 {
+		return ""
+	}
+	remainder := strings.TrimSpace(parts[5])
+
+	switch {
+	case remainder == "":
+		return ""
+	case strings.HasPrefix(remainder, "["):
+		return remainder // e.g. [heap], [stack], [anon: Go: gc bits]
+	case strings.Contains(remainder, "anon"):
+		return remainder // e.g. anon_inode:bpf-map
+	case strings.HasPrefix(remainder, "/"):
+		return remainder // file-backed mapping
+	default:
+		// Check if it's just a number (inode) — treat as anonymous
+		if _, err := strconv.ParseUint(remainder, 10, 64); err == nil {
+			return ""
+		}
+		return remainder
+	}
+}
+
 // and converts it to page count (dividing by 4 kB per page).
 func parseKBToPages(line string) int {
 	// Expected format: "Rss:                  12 kB" or "Swap:     0 kB"
@@ -175,7 +168,11 @@ func parseKBToPages(line string) int {
 		return 0
 	}
 
-	// Convert kB to pages (4 kB per page)
-	pages := valueKB / 4
+	// Convert kB to pages using the system page size
+	pageSizeKB := int64(PageSizeBytes / 1024)
+	if pageSizeKB == 0 {
+		pageSizeKB = 4
+	}
+	pages := valueKB / pageSizeKB
 	return int(pages)
 }

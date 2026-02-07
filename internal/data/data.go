@@ -283,7 +283,7 @@ func (r *AddrRange) addPageToStatus(pageOffset uint64, status string) {
 	// Remove page from all other statuses
 	for otherStatus := range r.Statuses {
 		if otherStatus != status {
-			r.removePageFromStatus(pageOffset, otherStatus)
+			r.removePageFromStatus(otherStatus)
 		}
 	}
 
@@ -297,7 +297,7 @@ func (r *AddrRange) addPageToStatus(pageOffset uint64, status string) {
 }
 
 // removePageFromStatus decrements the count for a specific status.
-func (r *AddrRange) removePageFromStatus(pageOffset uint64, status string) {
+func (r *AddrRange) removePageFromStatus(status string) {
 	if r.Statuses == nil || r.Statuses[status] == nil {
 		return
 	}
@@ -468,31 +468,29 @@ func (pd *ProcessData) getThread(tid int) *ThreadData {
 	return nil
 }
 
+// getOrCreateThread returns the index of the thread with the given TID,
+// creating it if it doesn't exist. Returns the thread index.
+func (pd *ProcessData) getOrCreateThread(tid int) int {
+	if pd.Threads == nil {
+		pd.Threads = []ThreadData{}
+	}
+	for i, th := range pd.Threads {
+		if th.TID == tid {
+			return i
+		}
+	}
+	pd.Threads = append(pd.Threads, ThreadData{
+		TID:    tid,
+		Ranges: []AddrRange{},
+	})
+	return len(pd.Threads) - 1
+}
+
 // AddMmapRange records a new virtual memory allocation from an mmap syscall.
 // Creates or finds the thread's range list and adds the new address range.
 // Automatically sorts ranges after insertion for consistent ordering.
 func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
-	if pd.Threads == nil {
-		pd.Threads = []ThreadData{}
-	}
-
-	// Find or create thread
-	var threadIdx = -1
-	for i, th := range pd.Threads {
-		if th.TID == tid {
-			threadIdx = i
-			break
-		}
-	}
-
-	if threadIdx == -1 {
-		// Create new thread
-		pd.Threads = append(pd.Threads, ThreadData{
-			TID:    tid,
-			Ranges: []AddrRange{},
-		})
-		threadIdx = len(pd.Threads) - 1
-	}
+	threadIdx := pd.getOrCreateThread(tid)
 
 	// Create new range
 	startAddr := addr
@@ -519,27 +517,7 @@ func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
 // When brk!=0, ret is the actual allocated break address after attempted change.
 // Maintains a special [heap] range that tracks heap memory usage.
 func (pd *ProcessData) ExtendBrkRange(tid int, brk uint64, ret uint64) {
-	if pd.Threads == nil {
-		pd.Threads = []ThreadData{}
-	}
-
-	// Find or create thread
-	var threadIdx = -1
-	for i, th := range pd.Threads {
-		if th.TID == tid {
-			threadIdx = i
-			break
-		}
-	}
-
-	if threadIdx == -1 {
-		// Create new thread
-		pd.Threads = append(pd.Threads, ThreadData{
-			TID:    tid,
-			Ranges: []AddrRange{},
-		})
-		threadIdx = len(pd.Threads) - 1
-	}
+	threadIdx := pd.getOrCreateThread(tid)
 
 	// If brk==0, this is a query - ret contains the current break
 	if brk == 0 {

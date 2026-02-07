@@ -40,6 +40,11 @@ func (h *DBHelper) reportError(err error) {
 	}
 }
 
+// pidKey returns the string key used for database operations.
+func pidKey(pid int) string {
+	return fmt.Sprintf("%d", pid)
+}
+
 // GetOrCreateProcess retrieves a process or creates a new one if it doesn't exist
 // Returns error if the process has already exited (prevents recreation from stale events)
 func (h *DBHelper) GetOrCreateProcess(pid int, name string) (*data.ProcessData, bool, error) {
@@ -111,8 +116,7 @@ func (h *DBHelper) UpsertProcess(pid int, record *data.ProcessData) error {
 	}
 
 	// Save record to main database (only Count fields, no Value)
-	key := fmt.Sprintf("%d", pid)
-	if err := h.db.Upsert(key, record); err != nil {
+	if err := h.db.Upsert(pidKey(pid), record); err != nil {
 		return fmt.Errorf("failed to upsert process %d: %w", pid, err)
 	}
 
@@ -136,7 +140,7 @@ func (h *DBHelper) HandleProcessExec(ev uimsg.ProcessExec) error {
 
 // HandleProcessExit handles process exit events
 func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
-	key := fmt.Sprintf("%d", ev.PID)
+	key := pidKey(ev.PID)
 
 	// Delete from both databases
 	if err := h.db.Delete(key); err != nil {
@@ -165,8 +169,7 @@ func (h *DBHelper) HandleMmapEvent(ev uimsg.ProcessMmap) error {
 	record.AddMmapRange(ev.TID, ev.Addr, ev.Len)
 
 	// Save ProcessData (no Value, just structure)
-	key := fmt.Sprintf("%d", ev.PID)
-	if err := h.db.Upsert(key, record); err != nil {
+	if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
 		return fmt.Errorf("failed to upsert process: %w", err)
 	}
 
@@ -190,8 +193,7 @@ func (h *DBHelper) HandleBrkEvent(ev uimsg.ProcessBrk) error {
 	record.ExtendBrkRange(ev.TID, ev.Brk, ev.Ret)
 
 	// Save ProcessData (no Value, just structure)
-	key := fmt.Sprintf("%d", ev.PID)
-	if err := h.db.Upsert(key, record); err != nil {
+	if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
 		return fmt.Errorf("failed to upsert process: %w", err)
 	}
 
@@ -215,8 +217,7 @@ func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
 	record.RemoveMmapRange(ev.TID, ev.Addr, ev.Len)
 
 	// Save ProcessData
-	key := fmt.Sprintf("%d", ev.PID)
-	if err := h.db.Upsert(key, record); err != nil {
+	if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
 		return fmt.Errorf("failed to upsert process: %w", err)
 	}
 
@@ -231,67 +232,7 @@ func (h *DBHelper) HandlePageFaultEvent(ev uimsg.ProcessPageFault) error {
 	if ev.ErrorCode != constants.PageFaultErrorCode {
 		return nil
 	}
-
-	record, err := h.getProcess(ev.PID)
-	if err != nil {
-		return fmt.Errorf("failed to get process for page fault %d: %w", ev.PID, err)
-	}
-
-	if record == nil {
-		// Process not found - ignore stale event
-		return nil
-	}
-
-	// Calculate page address and offset
-	pageAddr := (ev.Address / data.PageSizeBytes) * data.PageSizeBytes
-
-	// Find the range containing this address
-	r := record.FindRangeForAddr(ev.TID, pageAddr)
-	if r == nil {
-		// Range not found - this shouldn't happen but handle gracefully
-		return nil
-	}
-
-	pageOffset := (pageAddr - r.StartVal) / data.PageSizeBytes
-
-	// --- UPDATE ADDRESS DATABASE ---
-	// Get or create address data
-	addrData, err := h.getOrCreateAddressData(ev.PID)
-	if err != nil {
-		return fmt.Errorf("failed to get address data: %w", err)
-	}
-
-	// Add page offset directly to AddressData
-	addrData.AddPageOffset(ev.TID, r.StartVal, pageOffset, "INIT")
-
-	// Save AddressData
-	addrKey := fmt.Sprintf("%d", ev.PID)
-	if err := h.addressDB.Upsert(addrKey, addrData); err != nil {
-		return fmt.Errorf("failed to upsert address data: %w", err)
-	}
-
-	// --- UPDATE MAIN DATABASE ---
-	// Get counts from AddressData and update ProcessData
-	counts := addrData.GetStatusCounts(ev.TID, r.StartVal)
-
-	// Update counts in ProcessData
-	if r.Statuses == nil {
-		r.Statuses = make(map[string]*data.StatusCount)
-	}
-	for status, count := range counts {
-		if r.Statuses[status] == nil {
-			r.Statuses[status] = &data.StatusCount{}
-		}
-		r.Statuses[status].Count = count
-	}
-
-	// Save ProcessData
-	key := fmt.Sprintf("%d", ev.PID)
-	if err := h.db.Upsert(key, record); err != nil {
-		return fmt.Errorf("failed to upsert process: %w", err)
-	}
-
-	return nil
+	return h.updatePageStatus(ev.PID, ev.TID, ev.Address, "INIT")
 }
 
 // HandleSwapEvent handles swap events for a process
@@ -301,70 +242,68 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
 		return nil
 	}
 
-	record, err := h.getProcess(ev.PID)
-	if err != nil {
-		return fmt.Errorf("failed to get process for swap %d: %w", ev.PID, err)
+	status := "UNSWAP"
+	if ev.IsSwap {
+		status = "SWAP"
 	}
 
+	err := h.updatePageStatus(ev.PID, ev.TID, ev.Address, status)
+	if err != nil {
+		// Provide additional context for swap events on unknown processes
+		record, _ := h.getProcess(ev.PID)
+		if record == nil {
+			h.reportError(fmt.Errorf("swap event for unknown process PID %d (process may have exited)", ev.PID))
+			return nil
+		}
+	}
+	return err
+}
+
+// updatePageStatus handles the shared logic for page fault and swap events:
+// finds the process and range, updates the address database, syncs counts, and saves.
+func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string) error {
+	record, err := h.getProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to get process %d: %w", pid, err)
+	}
 	if record == nil {
-		// Process not found for swap event - report but don't fail
-		h.reportError(fmt.Errorf("swap event for unknown process PID %d (process may have exited)", ev.PID))
 		return nil
 	}
 
 	// Calculate page address and offset
-	pageAddr := (ev.Address / data.PageSizeBytes) * data.PageSizeBytes
-
-	// Find the range containing this address
-	r := record.FindRangeForAddr(ev.TID, pageAddr)
+	pageAddr := (address / data.PageSizeBytes) * data.PageSizeBytes
+	r := record.FindRangeForAddr(tid, pageAddr)
 	if r == nil {
-		// Range not found - this shouldn't happen but handle gracefully
 		return nil
 	}
-
 	pageOffset := (pageAddr - r.StartVal) / data.PageSizeBytes
 
 	// --- UPDATE ADDRESS DATABASE ---
-	// Get or create address data
-	addrData, err := h.getOrCreateAddressData(ev.PID)
+	addrData, err := h.getOrCreateAddressData(pid)
 	if err != nil {
 		return fmt.Errorf("failed to get address data: %w", err)
 	}
+	addrData.AddPageOffset(tid, r.StartVal, pageOffset, status)
 
-	// Add page offset directly to AddressData with appropriate status
-	if ev.IsSwap {
-		addrData.AddPageOffset(ev.TID, r.StartVal, pageOffset, "SWAP")
-	} else {
-		addrData.AddPageOffset(ev.TID, r.StartVal, pageOffset, "UNSWAP")
-	}
-
-	// Save AddressData
-	addrKey := fmt.Sprintf("%d", ev.PID)
-	if err := h.addressDB.Upsert(addrKey, addrData); err != nil {
+	if err := h.addressDB.Upsert(pidKey(pid), addrData); err != nil {
 		return fmt.Errorf("failed to upsert address data: %w", err)
 	}
 
 	// --- UPDATE MAIN DATABASE ---
-	// Get counts from AddressData and update ProcessData
-	counts := addrData.GetStatusCounts(ev.TID, r.StartVal)
-
-	// Update counts in ProcessData
+	counts := addrData.GetStatusCounts(tid, r.StartVal)
 	if r.Statuses == nil {
 		r.Statuses = make(map[string]*data.StatusCount)
 	}
-	for status, count := range counts {
-		if r.Statuses[status] == nil {
-			r.Statuses[status] = &data.StatusCount{}
+	for s, count := range counts {
+		if r.Statuses[s] == nil {
+			r.Statuses[s] = &data.StatusCount{}
 		}
-		r.Statuses[status].Count = count
+		r.Statuses[s].Count = count
 	}
 
-	// Save ProcessData
-	key := fmt.Sprintf("%d", ev.PID)
-	if err := h.db.Upsert(key, record); err != nil {
+	if err := h.db.Upsert(pidKey(pid), record); err != nil {
 		return fmt.Errorf("failed to upsert process: %w", err)
 	}
-
 	return nil
 }
 
@@ -392,8 +331,7 @@ func (h *DBHelper) LoadSmapsForProcess(pid int) error {
 	}
 
 	// Save ProcessData (just structure, no Value)
-	key := fmt.Sprintf("%d", pid)
-	if err := h.db.Upsert(key, record); err != nil {
+	if err := h.db.Upsert(pidKey(pid), record); err != nil {
 		return fmt.Errorf("failed to upsert process: %w", err)
 	}
 

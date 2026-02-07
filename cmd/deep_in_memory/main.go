@@ -66,57 +66,13 @@ func main() {
 		}
 	}
 
-	// Start mmap collector with shared state
-	if sharedState != nil {
-		mmapCleanup, err := mmap.Start(ctx, p.Send, sharedState)
-		if err != nil {
-			p.Send(uimsg.ApplicationError{
-				Message:  fmt.Sprintf("Failed to start mmap eBPF collector: %v. Memory mapping tracing disabled.", err),
-				Severity: "warning",
-			})
-		} else {
-			defer mmapCleanup()
+	// Start secondary eBPF collectors with shared state
+	cleanups := startCollectors(ctx, p.Send, sharedState)
+	defer func() {
+		for _, cleanup := range cleanups {
+			cleanup()
 		}
-	}
-
-	// Start brk collector with shared state
-	if sharedState != nil {
-		brkCleanup, err := brk.Start(ctx, p.Send, sharedState)
-		if err != nil {
-			p.Send(uimsg.ApplicationError{
-				Message:  fmt.Sprintf("Failed to start brk eBPF collector: %v. Heap tracing disabled.", err),
-				Severity: "warning",
-			})
-		} else {
-			defer brkCleanup()
-		}
-	}
-
-	// Start page_fault collector with shared state
-	if sharedState != nil {
-		pageFaultCleanup, err := page_fault.Start(ctx, p.Send, sharedState)
-		if err != nil {
-			p.Send(uimsg.ApplicationError{
-				Message:  fmt.Sprintf("Failed to start page_fault eBPF collector: %v. Page fault tracing disabled.", err),
-				Severity: "warning",
-			})
-		} else {
-			defer pageFaultCleanup()
-		}
-	}
-
-	// Start swap collector with shared state
-	if sharedState != nil {
-		swapCleanup, err := swap.Start(ctx, p.Send, sharedState)
-		if err != nil {
-			p.Send(uimsg.ApplicationError{
-				Message:  fmt.Sprintf("Failed to start swap eBPF collector: %v. Swap tracing disabled.", err),
-				Severity: "warning",
-			})
-		} else {
-			defer swapCleanup()
-		}
-	}
+	}()
 
 	// Set the target PID setter in the app model if eBPF is enabled
 	if sharedState != nil {
@@ -134,6 +90,49 @@ func main() {
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("tui error: %v", err)
 	}
+}
+
+// collectorDef describes a secondary eBPF collector to start.
+type collectorDef struct {
+	name  string
+	start func(ctx context.Context, send func(tea.Msg), state interface{}) (func() error, error)
+}
+
+// startCollectors launches all secondary eBPF collectors, logging warnings on failure.
+// Returns a slice of cleanup functions for successfully started collectors.
+func startCollectors(ctx context.Context, send func(tea.Msg), state *ebpfshared.SharedState) []func() error {
+	if state == nil {
+		return nil
+	}
+
+	collectors := []collectorDef{
+		{"mmap", func(ctx context.Context, send func(tea.Msg), s interface{}) (func() error, error) {
+			return mmap.Start(ctx, send, s.(*ebpfshared.SharedState))
+		}},
+		{"brk", func(ctx context.Context, send func(tea.Msg), s interface{}) (func() error, error) {
+			return brk.Start(ctx, send, s.(*ebpfshared.SharedState))
+		}},
+		{"page_fault", func(ctx context.Context, send func(tea.Msg), s interface{}) (func() error, error) {
+			return page_fault.Start(ctx, send, s.(*ebpfshared.SharedState))
+		}},
+		{"swap", func(ctx context.Context, send func(tea.Msg), s interface{}) (func() error, error) {
+			return swap.Start(ctx, send, s.(*ebpfshared.SharedState))
+		}},
+	}
+
+	var cleanups []func() error
+	for _, c := range collectors {
+		cleanup, err := c.start(ctx, send, state)
+		if err != nil {
+			send(uimsg.ApplicationError{
+				Message:  fmt.Sprintf("Failed to start %s eBPF collector: %v. Tracing disabled.", c.name, err),
+				Severity: "warning",
+			})
+			continue
+		}
+		cleanups = append(cleanups, cleanup)
+	}
+	return cleanups
 }
 
 func clearDatabases() {
