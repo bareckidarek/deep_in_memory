@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/timshannon/bolthold"
@@ -12,11 +13,13 @@ import (
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
-// DBHelper provides consistent database operations with error handling
+// DBHelper provides consistent database operations with error handling.
+// Thread-safe: errorCallback is protected by mutex for concurrent access.
 type DBHelper struct {
 	db            storedb.Db[data.ProcessData]
 	addressDB     storedb.Db[data.AddressData]
-	errorCallback func(error) // Callback to report non-critical errors to UI
+	mu            sync.RWMutex // Protects errorCallback
+	errorCallback func(error)  // Callback to report non-critical errors to UI
 }
 
 // NewDBHelper creates a new database helper
@@ -28,15 +31,22 @@ func NewDBHelper(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.Addr
 	}
 }
 
-// SetErrorCallback sets the callback function for reporting non-critical errors
+// SetErrorCallback sets the callback function for reporting non-critical errors.
+// Thread-safe: can be called while reportError is executing.
 func (h *DBHelper) SetErrorCallback(callback func(error)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.errorCallback = callback
 }
 
-// reportError sends a non-critical error to the UI if callback is set
+// reportError sends a non-critical error to the UI if callback is set.
+// Thread-safe: reads callback under lock to prevent race with SetErrorCallback.
 func (h *DBHelper) reportError(err error) {
-	if h.errorCallback != nil {
-		h.errorCallback(err)
+	h.mu.RLock()
+	cb := h.errorCallback
+	h.mu.RUnlock()
+	if cb != nil {
+		cb(err)
 	}
 }
 
@@ -144,11 +154,14 @@ func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 
 	// Delete from both databases
 	if err := h.db.Delete(key); err != nil {
-		return nil // Ignore error - process may have already been removed by another event
+		h.reportError(fmt.Errorf("failed to delete process %d from main DB: %w", ev.PID, err))
+		// Continue to try deleting from address DB even if main DB delete fails
 	}
 
-	// Also delete from address database (ignore errors if not found)
-	h.addressDB.Delete(key)
+	// Also delete from address database
+	if err := h.addressDB.Delete(key); err != nil {
+		h.reportError(fmt.Errorf("failed to delete process %d from address DB: %w", ev.PID, err))
+	}
 
 	return nil
 }

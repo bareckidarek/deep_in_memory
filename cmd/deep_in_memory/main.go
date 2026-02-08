@@ -42,7 +42,11 @@ func main() {
 	}
 	defer addressStore.Close()
 
-	initialProcs, _ := store.All()
+	initialProcs, err := store.All()
+	if err != nil {
+		log.Printf("Warning: failed to load initial processes from database: %v", err)
+		initialProcs = []data.ProcessData{} // Continue with empty dataset
+	}
 
 	initial := data.BuildDataset(initialProcs)
 	appModel := app.New(store, addressStore, initial, constants.DefaultRefreshInterval)
