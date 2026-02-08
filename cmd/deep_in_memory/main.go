@@ -88,9 +88,9 @@ func main() {
 	// Start secondary eBPF collectors with shared state
 	cleanups := startCollectors(ctx, p.Send, eventCollector, sharedState)
 	defer func() {
-		for i, cleanup := range cleanups {
+		for name, cleanup := range cleanups {
 			if err := cleanup(); err != nil {
-				log.Printf("Warning: cleanup function %d failed: %v", i, err)
+				log.Printf("Warning: %s collector cleanup failed: %v", name, err)
 			}
 		}
 	}()
@@ -124,8 +124,8 @@ type collectorDef struct {
 }
 
 // startCollectors launches all secondary eBPF collectors, logging warnings on failure.
-// Returns a slice of cleanup functions for successfully started collectors.
-func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfshared.CentralEventCollector, state *ebpfshared.SharedState) []func() error {
+// Returns a map of cleanup functions for successfully started collectors, keyed by collector name.
+func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfshared.CentralEventCollector, state *ebpfshared.SharedState) map[string]func() error {
 	if state == nil {
 		return nil
 	}
@@ -145,7 +145,7 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 		}},
 	}
 
-	var cleanups []func() error
+	cleanups := make(map[string]func() error)
 	for _, c := range collectors {
 		cleanup, err := c.start(ctx, collector, state)
 		if err != nil {
@@ -155,7 +155,7 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 			})
 			continue
 		}
-		cleanups = append(cleanups, cleanup)
+		cleanups[c.name] = cleanup
 	}
 	return cleanups
 }

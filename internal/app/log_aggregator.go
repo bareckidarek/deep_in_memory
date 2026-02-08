@@ -92,7 +92,8 @@ func (la *LogAggregator) Flush(pid int) {
 }
 
 // addToHistoryLocked adds a log entry to history, maintaining max size (newest first).
-// Caller must hold la.mu.
+// IMPORTANT: Caller MUST hold la.mu lock before calling this method.
+// This is an internal helper method called only from Flush() which already holds the lock.
 func (la *LogAggregator) addToHistoryLocked(entry LogEntry) {
 	// Prepend to keep newest at top
 	la.history = append([]LogEntry{entry}, la.history...)
