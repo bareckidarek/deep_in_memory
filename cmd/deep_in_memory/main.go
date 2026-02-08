@@ -48,6 +48,17 @@ func main() {
 	appModel := app.New(store, addressStore, initial, constants.DefaultRefreshInterval)
 	p := tea.NewProgram(appModel)
 
+	// Create central event collector for maintaining chronological order of events
+	// This collector receives events from all eBPF collectors and sorts them by timestamp
+	// before sending to the application, ensuring proper event ordering across different
+	// event types (page_fault, swap, mmap, brk)
+	eventCollector := ebpfshared.NewCentralEventCollector(
+		p.Send,
+		constants.EventBatchSize,
+		constants.EventBatchFlushInterval,
+	)
+	defer eventCollector.Stop()
+
 	// Start sched collector and get the shared state
 	var sharedState *ebpfshared.SharedState
 	schedCleanup, stateInterface, err := sched.Start(ctx, p.Send)
@@ -67,7 +78,7 @@ func main() {
 	}
 
 	// Start secondary eBPF collectors with shared state
-	cleanups := startCollectors(ctx, p.Send, sharedState)
+	cleanups := startCollectors(ctx, p.Send, eventCollector, sharedState)
 	defer func() {
 		for _, cleanup := range cleanups {
 			cleanup()
@@ -90,39 +101,43 @@ func main() {
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("tui error: %v", err)
 	}
+
+	// Stop async DB writer before closing databases.
+	// This drains any pending write operations.
+	appModel.StopAsyncWriter()
 }
 
 // collectorDef describes a secondary eBPF collector to start.
 type collectorDef struct {
 	name  string
-	start func(ctx context.Context, send func(tea.Msg), state interface{}) (func() error, error)
+	start func(ctx context.Context, collector *ebpfshared.CentralEventCollector, state interface{}) (func() error, error)
 }
 
 // startCollectors launches all secondary eBPF collectors, logging warnings on failure.
 // Returns a slice of cleanup functions for successfully started collectors.
-func startCollectors(ctx context.Context, send func(tea.Msg), state *ebpfshared.SharedState) []func() error {
+func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfshared.CentralEventCollector, state *ebpfshared.SharedState) []func() error {
 	if state == nil {
 		return nil
 	}
 
 	collectors := []collectorDef{
-		{"mmap", func(ctx context.Context, send func(tea.Msg), s interface{}) (func() error, error) {
-			return mmap.Start(ctx, send, s.(*ebpfshared.SharedState))
+		{"mmap", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s interface{}) (func() error, error) {
+			return mmap.Start(ctx, col, s.(*ebpfshared.SharedState))
 		}},
-		{"brk", func(ctx context.Context, send func(tea.Msg), s interface{}) (func() error, error) {
-			return brk.Start(ctx, send, s.(*ebpfshared.SharedState))
+		{"brk", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s interface{}) (func() error, error) {
+			return brk.Start(ctx, col, s.(*ebpfshared.SharedState))
 		}},
-		{"page_fault", func(ctx context.Context, send func(tea.Msg), s interface{}) (func() error, error) {
-			return page_fault.Start(ctx, send, s.(*ebpfshared.SharedState))
+		{"page_fault", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s interface{}) (func() error, error) {
+			return page_fault.Start(ctx, col, s.(*ebpfshared.SharedState))
 		}},
-		{"swap", func(ctx context.Context, send func(tea.Msg), s interface{}) (func() error, error) {
-			return swap.Start(ctx, send, s.(*ebpfshared.SharedState))
+		{"swap", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s interface{}) (func() error, error) {
+			return swap.Start(ctx, col, s.(*ebpfshared.SharedState))
 		}},
 	}
 
 	var cleanups []func() error
 	for _, c := range collectors {
-		cleanup, err := c.start(ctx, send, state)
+		cleanup, err := c.start(ctx, collector, state)
 		if err != nil {
 			send(uimsg.ApplicationError{
 				Message:  fmt.Sprintf("Failed to start %s eBPF collector: %v. Tracing disabled.", c.name, err),

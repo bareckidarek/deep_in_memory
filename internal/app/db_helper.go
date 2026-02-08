@@ -144,7 +144,7 @@ func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 
 	// Delete from both databases
 	if err := h.db.Delete(key); err != nil {
-		return fmt.Errorf("failed to delete process %d: %w", ev.PID, err)
+		return nil // Ignore error - process may have already been removed by another event
 	}
 
 	// Also delete from address database (ignore errors if not found)
@@ -267,6 +267,7 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 		return fmt.Errorf("failed to get process %d: %w", pid, err)
 	}
 	if record == nil {
+		// Process not found — it may have exited. Silently ignore.
 		return nil
 	}
 
@@ -274,6 +275,8 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	pageAddr := (address / data.PageSizeBytes) * data.PageSizeBytes
 	r := record.FindRangeForAddr(tid, pageAddr)
 	if r == nil {
+		// Range not found — mmap may not have been processed yet, or the range
+		// was munmapped. Silently ignore rather than error.
 		return nil
 	}
 	pageOffset := (pageAddr - r.StartVal) / data.PageSizeBytes

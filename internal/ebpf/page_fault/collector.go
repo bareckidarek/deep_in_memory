@@ -3,10 +3,7 @@
 package page_fault
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"time"
 
@@ -15,15 +12,14 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
-	"deep_in_memory/internal/constants"
 	ebpfshared "deep_in_memory/internal/ebpf"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
-// Start attaches page_fault_user tracepoint and streams events to the provided send function.
+// Start attaches page_fault tracepoint and streams events to the central event collector.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // Requires the SharedState from the sched module to filter events.
-func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpfshared.SharedState) (func() error, error) {
+func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sharedState *ebpfshared.SharedState) (func() error, error) {
 	var objs PageFaultProgObjects
 	spec, err := LoadPageFaultProg()
 	if err != nil {
@@ -59,43 +55,26 @@ func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpfshared.Shar
 		return nil, fmt.Errorf("create ringbuf reader: %w", err)
 	}
 
-	go func() {
-		defer reader.Close()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			record, err := reader.Read()
-			if err != nil {
-				if errors.Is(err, ringbuf.ErrClosed) {
-					return
-				}
-				// skip transient errors
-				time.Sleep(constants.EbpfRetryDelay)
-				continue
-			}
-
-			var e PageFaultProgPageFaultEvent
-			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &e); err != nil {
-				continue
-			}
-
-			ts := time.Unix(0, int64(e.Ts))
-			msg := uimsg.ProcessPageFault{
-				Timestamp: ts,
-				PID:       int(e.Pid),
-				TID:       int(e.Tid),
-				Address:   e.Address,
-				IP:        e.Ip,
-				ErrorCode: e.ErrorCode,
-				Comm:      cString(e.Comm[:]),
-			}
-			send(msg)
+	// Use batched event processing for high-frequency page fault events
+	processor := func(e PageFaultProgPageFaultEvent) tea.Msg {
+		ts := time.Unix(0, int64(e.Ts))
+		return uimsg.ProcessPageFault{
+			Timestamp: ts,
+			PID:       int(e.Pid),
+			TID:       int(e.Tid),
+			Address:   e.Address,
+			IP:        e.Ip,
+			ErrorCode: e.ErrorCode,
+			Comm:      cString(e.Comm[:]),
 		}
-	}()
+	}
+
+	go ebpfshared.ProcessEventsBatched(
+		ctx,
+		reader,
+		processor,
+		collector,
+	)
 
 	cleanup := func() error {
 		reader.Close()

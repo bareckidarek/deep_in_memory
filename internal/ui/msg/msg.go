@@ -2,6 +2,12 @@ package msg
 
 import "time"
 
+// TimestampedEvent interface for events that have a timestamp.
+// Used by the event collector to sort events chronologically.
+type TimestampedEvent interface {
+	GetTimestamp() time.Time
+}
+
 // ProcessExec is emitted when a process calls exec.
 type ProcessExec struct {
 	Timestamp time.Time
@@ -68,6 +74,15 @@ type ProcessSwapUnswap struct {
 	ErrorCode uint64
 }
 
+// GetTimestamp implementations for TimestampedEvent interface
+func (e ProcessExec) GetTimestamp() time.Time       { return e.Timestamp }
+func (e ProcessExit) GetTimestamp() time.Time       { return e.Timestamp }
+func (e ProcessMmap) GetTimestamp() time.Time       { return e.Timestamp }
+func (e ProcessMunmap) GetTimestamp() time.Time     { return e.Timestamp }
+func (e ProcessBrk) GetTimestamp() time.Time        { return e.Timestamp }
+func (e ProcessPageFault) GetTimestamp() time.Time  { return e.Timestamp }
+func (e ProcessSwapUnswap) GetTimestamp() time.Time { return e.Timestamp }
+
 // LoadSmapsRequest is sent when user selects a process to load its memory maps from /proc/PID/smaps.
 type LoadSmapsRequest struct {
 	PID int
@@ -92,4 +107,42 @@ type GetLogsMsg struct{}
 // LogsResponseMsg contains formatted log entries for display.
 type LogsResponseMsg struct {
 	Logs []string // Pre-formatted log lines with timestamps
+}
+
+// EventBatch contains multiple events batched together for efficient processing.
+// Used by eBPF collectors to reduce the number of messages sent to Bubble Tea.
+type EventBatch struct {
+	Messages []interface{} // Slice of event messages (ProcessMmap, ProcessPageFault, etc.)
+}
+
+// PagemapLookupRequest is sent when user submits a virtual address for pagemap lookup.
+type PagemapLookupRequest struct {
+	PID   int
+	VAddr uint64
+}
+
+// PagemapLookupResponse contains the result of a pagemap lookup.
+type PagemapLookupResponse struct {
+	Lines      []string // Formatted pagemap entry lines
+	PFN        uint64   // Page Frame Number (for iomem matching)
+	HasPFN     bool     // Whether a valid PFN was found
+	VAddrInput string   // The address that was looked up
+}
+
+// IomemLoadResponse contains parsed /proc/iomem data.
+type IomemLoadResponse struct {
+	Ranges []IomemRangeMsg
+}
+
+// IomemRangeMsg is a UI-safe copy of IomemRange.
+type IomemRangeMsg struct {
+	Start uint64
+	End   uint64
+	Name  string
+	Level int
+}
+
+// ClearPhysicalMemoryMsg is sent when a process exits to clear physical memory state.
+type ClearPhysicalMemoryMsg struct {
+	PID int
 }

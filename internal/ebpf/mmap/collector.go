@@ -3,10 +3,7 @@
 package mmap
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"time"
 
@@ -15,15 +12,14 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
-	"deep_in_memory/internal/constants"
 	ebpfshared "deep_in_memory/internal/ebpf"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
-// Start attaches mmap/munmap tracepoints and streams events to the provided send function.
+// Start attaches mmap/munmap tracepoints and streams events to the central event collector.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // Requires the SharedState from the sched module to filter events.
-func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpfshared.SharedState) (func() error, error) {
+func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sharedState *ebpfshared.SharedState) (func() error, error) {
 	var objs MmapProgObjects
 	spec, err := LoadMmapProg()
 	if err != nil {
@@ -86,39 +82,39 @@ func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpfshared.Shar
 		return nil, fmt.Errorf("create ringbuf reader: %w", err)
 	}
 
-	go func() {
-		defer reader.Close()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
+	// Use batched event processing for medium-frequency mmap/munmap events
+	processor := func(e MmapProgMmapEvent) tea.Msg {
+		ts := time.Unix(0, int64(e.Ts))
+		switch e.Type {
+		case 1:
+			return uimsg.ProcessMmap{
+				Timestamp: ts,
+				PID:       int(e.Pid),
+				TID:       int(e.Tid),
+				Addr:      e.Addr,
+				Len:       e.Len,
+				Comm:      cString(e.Comm[:]),
 			}
-
-			record, err := reader.Read()
-			if err != nil {
-				if errors.Is(err, ringbuf.ErrClosed) {
-					return
-				}
-				// skip transient errors
-				time.Sleep(constants.EbpfRetryDelay)
-				continue
+		case 2:
+			return uimsg.ProcessMunmap{
+				Timestamp: ts,
+				PID:       int(e.Pid),
+				TID:       int(e.Tid),
+				Addr:      e.Addr,
+				Len:       e.Len,
+				Comm:      cString(e.Comm[:]),
 			}
-
-			var e MmapProgMmapEvent
-			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &e); err != nil {
-				continue
-			}
-
-			ts := time.Unix(0, int64(e.Ts))
-			switch e.Type {
-			case 1:
-				send(uimsg.ProcessMmap{Timestamp: ts, PID: int(e.Pid), TID: int(e.Tid), Addr: e.Addr, Len: e.Len, Comm: cString(e.Comm[:])})
-			case 2:
-				send(uimsg.ProcessMunmap{Timestamp: ts, PID: int(e.Pid), TID: int(e.Tid), Addr: e.Addr, Len: e.Len, Comm: cString(e.Comm[:])})
-			}
+		default:
+			return nil // Unknown event type
 		}
-	}()
+	}
+
+	go ebpfshared.ProcessEventsBatched(
+		ctx,
+		reader,
+		processor,
+		collector,
+	)
 
 	cleanup := func() error {
 		reader.Close()

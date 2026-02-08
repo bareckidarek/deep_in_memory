@@ -67,6 +67,15 @@ const (
 
 	// Log aggregation flush interval
 	LogFlushInterval = 2 * time.Second
+
+	// Event batching flush interval
+	EventBatchFlushInterval = 50 * time.Millisecond
+)
+
+// Event batching sizes for different collectors
+const (
+	// Batch sizes optimized for event frequency
+	EventBatchSize = 200 // General batch size for all collectors to maintain order
 )
 
 // Modal notification types

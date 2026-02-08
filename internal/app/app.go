@@ -20,6 +20,7 @@ type refreshMsg struct{}
 type Model struct {
 	ui              *uimodel.Model
 	dbHelper        *DBHelper
+	asyncWriter     *AsyncDBWriter // ALL DB writes go through this
 	refreshInterval time.Duration
 	logAggregator   *LogAggregator
 	targetPID       int // Currently monitored PID
@@ -29,13 +30,16 @@ type Model struct {
 // Manages periodic dataset refresh and routes events between eBPF collectors and the UI.
 // The refresh interval controls how often the UI updates with new process data.
 func New(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.AddressData], initial data.Dataset, refresh time.Duration) *Model {
-	return &Model{
+	dbHelper := NewDBHelper(db, addressDB, nil)
+	m := &Model{
 		ui:              uimodel.New(initial),
-		dbHelper:        NewDBHelper(db, addressDB, nil), // Will be set later
+		dbHelper:        dbHelper,
+		asyncWriter:     NewAsyncDBWriter(dbHelper, nil), // errCallback set via SetErrorCallback
 		refreshInterval: refresh,
 		logAggregator:   NewLogAggregator(),
 		targetPID:       0,
 	}
+	return m
 }
 
 // SetTargetPIDSetter wires the eBPF target PID setter into the UI model.
@@ -53,6 +57,15 @@ func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 // instead of being silently ignored, allowing the UI to inform the user.
 func (m *Model) SetErrorCallback(callback func(error)) {
 	m.dbHelper.SetErrorCallback(callback)
+	m.asyncWriter.SetErrorCallback(callback)
+}
+
+// StopAsyncWriter gracefully shuts down the async DB writer.
+// Must be called before closing BoltDB databases.
+func (m *Model) StopAsyncWriter() {
+	if m.asyncWriter != nil {
+		m.asyncWriter.Stop()
+	}
 }
 
 // Init starts periodic refresh and initializes UI.
@@ -64,6 +77,10 @@ func (m *Model) Init() tea.Cmd {
 		tea.Tick(constants.LogFlushInterval, func(time.Time) tea.Msg {
 			return uimsg.GetLogsMsg{}
 		}),
+		// Load /proc/iomem on startup
+		func() tea.Msg {
+			return loadIomem()
+		},
 	)
 }
 
@@ -76,23 +93,15 @@ func (m *Model) updateUI(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-// handleTracedEvent is a generic handler for eBPF events that follow the pattern:
-// check targetPID → call dbHelper → optionally log → return error cmd on failure.
-func (m *Model) handleTracedEvent(pid int, handler func() error, logType string, logAddr uint64, tid int) (tea.Model, tea.Cmd) {
+// handleTracedEvent enqueues an eBPF event for async DB processing.
+// The DB write happens in the background goroutine — Update() never blocks on BoltDB.
+// Logging happens immediately (logs don't depend on DB state).
+func (m *Model) handleTracedEvent(pid int, handler func(*DBHelper) error, logType string, logAddr uint64, tid int) (tea.Model, tea.Cmd) {
 	if m.targetPID != pid {
 		return m, nil
 	}
-	if err := handler(); err != nil {
-		return m, func() tea.Msg {
-			return uimsg.ApplicationError{
-				Message:  fmt.Sprintf("Failed to handle %s event (PID %d): %v", logType, pid, err),
-				Severity: "error",
-			}
-		}
-	}
-	if pid == m.targetPID {
-		m.logAggregator.Record(logType, logAddr, pid, tid)
-	}
+	m.asyncWriter.Enqueue(pid, handler)
+	m.logAggregator.Record(logType, logAddr, pid, tid)
 	return m, nil
 }
 
@@ -101,6 +110,13 @@ func (m *Model) handleTracedEvent(pid int, handler func() error, logType string,
 // Handles process lifecycle events, memory operations, and periodic refresh.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case []interface{}:
+		// Handle batched events from eBPF collectors
+		for _, batchedMsg := range v {
+			m.Update(batchedMsg)
+		}
+		return m, nil
+
 	case uimsg.GetLogsMsg:
 		if m.targetPID != 0 {
 			m.logAggregator.Flush(m.targetPID)
@@ -113,52 +129,65 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, nextCmd)
 
 	case uimsg.ProcessExec:
-		if err := m.dbHelper.HandleProcessExec(v); err != nil {
-			return m, func() tea.Msg {
-				return uimsg.ApplicationError{
-					Message:  fmt.Sprintf("Failed to handle process exec (PID %d): %v", v.PID, err),
-					Severity: "error",
-				}
-			}
-		}
+		// Async: create process record in background
+		m.asyncWriter.Enqueue(v.PID, func(h *DBHelper) error {
+			return h.HandleProcessExec(v)
+		})
 		return m, nil
 
 	case uimsg.ProcessExit:
-		m.dbHelper.HandleProcessExit(v)
+		// EnqueueExit marks PID as dead FIRST, then queues deletion.
+		// All future events for this PID are rejected by Enqueue().
+		m.asyncWriter.EnqueueExit(v.PID, func(h *DBHelper) error {
+			return h.HandleProcessExit(v)
+		})
 		if v.PID == m.targetPID {
 			m.targetPID = 0
 		}
-		return m, nil
+		// Clear physical memory section state via UI message
+		return m, m.updateUI(uimsg.ClearPhysicalMemoryMsg{PID: v.PID})
 
 	case uimsg.ProcessMmap:
-		return m.handleTracedEvent(v.PID, func() error { return m.dbHelper.HandleMmapEvent(v) }, "mmap", v.Addr, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMmapEvent(v) }, "mmap", v.Addr, v.TID)
 
 	case uimsg.ProcessMunmap:
-		return m.handleTracedEvent(v.PID, func() error { return m.dbHelper.HandleMunmapEvent(v) }, "munmap", v.Addr, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMunmapEvent(v) }, "munmap", v.Addr, v.TID)
 
 	case uimsg.ProcessBrk:
-		return m.handleTracedEvent(v.PID, func() error { return m.dbHelper.HandleBrkEvent(v) }, "brk", v.Ret, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleBrkEvent(v) }, "brk", v.Ret, v.TID)
 
 	case uimsg.ProcessPageFault:
-		return m.handleTracedEvent(v.PID, func() error { return m.dbHelper.HandlePageFaultEvent(v) }, "page_fault", v.Address, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandlePageFaultEvent(v) }, "page_fault", v.Address, v.TID)
 
 	case uimsg.ProcessSwapUnswap:
 		logType := "swap_read"
 		if v.IsSwap {
 			logType = "swap_write"
 		}
-		return m.handleTracedEvent(v.PID, func() error { return m.dbHelper.HandleSwapEvent(v) }, logType, v.Address, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleSwapEvent(v) }, logType, v.Address, v.TID)
 
 	case uimsg.LoadSmapsRequest:
-		if err := m.dbHelper.LoadSmapsForProcess(v.PID); err != nil {
-			return m, func() tea.Msg {
-				return uimsg.ApplicationError{
-					Message:  fmt.Sprintf("Failed to load smaps (PID %d): %v", v.PID, err),
-					Severity: "error",
-				}
-			}
+		// Read /proc smaps synchronously (fast I/O), queue DB write async
+		threads, err := data.LoadSmapsRanges(v.PID)
+		if err != nil || len(threads) == 0 {
+			return m, nil
 		}
+		capturedThreads := threads
+		m.asyncWriter.Enqueue(v.PID, func(h *DBHelper) error {
+			record, err := h.getProcess(v.PID)
+			if err != nil || record == nil {
+				return nil // Process gone, skip
+			}
+			record.Threads = capturedThreads
+			return h.db.Upsert(pidKey(v.PID), record)
+		})
 		return m, nil
+
+	case uimsg.IomemLoadResponse:
+		return m, m.updateUI(v)
+
+	case uimsg.PagemapLookupResponse:
+		return m, m.updateUI(v)
 
 	case uimsg.ApplicationError:
 		return m, m.updateUI(v)
@@ -189,4 +218,24 @@ func (m *Model) reload() {
 	}
 	ds := data.BuildDataset(procs)
 	m.ui.SetDataset(ds)
+}
+
+// loadIomem reads /proc/iomem and returns an IomemLoadResponse message.
+func loadIomem() uimsg.IomemLoadResponse {
+	ranges, err := data.LoadIomem()
+	if err != nil {
+		return uimsg.IomemLoadResponse{}
+	}
+
+	var msgRanges []uimsg.IomemRangeMsg
+	for _, r := range ranges {
+		msgRanges = append(msgRanges, uimsg.IomemRangeMsg{
+			Start: r.Start,
+			End:   r.End,
+			Name:  r.Name,
+			Level: r.Level,
+		})
+	}
+
+	return uimsg.IomemLoadResponse{Ranges: msgRanges}
 }
