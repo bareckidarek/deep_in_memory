@@ -3,10 +3,7 @@
 package swap
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"time"
 
@@ -15,15 +12,14 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
-	"deep_in_memory/internal/constants"
 	ebpfshared "deep_in_memory/internal/ebpf"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
-// Start attaches swap kprobes and streams events to the provided send function.
+// Start attaches swap kprobes and streams events to the central event collector.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // Requires the SharedState from the sched module to filter events.
-func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpfshared.SharedState) (func() error, error) {
+func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sharedState *ebpfshared.SharedState) (func() error, error) {
 	var objs SwapProgObjects
 	spec, err := LoadSwapProg()
 	if err != nil {
@@ -86,58 +82,42 @@ func Start(ctx context.Context, send func(tea.Msg), sharedState *ebpfshared.Shar
 		return nil, fmt.Errorf("create ringbuf reader: %w", err)
 	}
 
-	go func() {
-		defer reader.Close()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+	// Use batched event processing for high-frequency swap events
+	processor := func(e SwapProgSwapEvent) tea.Msg {
+		ts := time.Unix(0, int64(e.Ts))
 
-			record, err := reader.Read()
-			if err != nil {
-				if errors.Is(err, ringbuf.ErrClosed) {
-					return
-				}
-				// skip transient errors
-				time.Sleep(constants.EbpfRetryDelay)
-				continue
+		switch e.Type {
+		case 1: // do_swap_page
+			return uimsg.ProcessSwapUnswap{
+				Timestamp: ts,
+				PID:       int(e.Pid),
+				TID:       int(e.Tid),
+				Address:   e.Addr,
+				IsSwap:    false, // UNSWAP
+				ErrorCode: e.Ret,
 			}
-
-			var e SwapProgSwapEvent
-			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &e); err != nil {
-				continue
+		case 2: // swap_writepage
+			// Need to add three zeros at the end (shift left by 12 bits = multiply by 4096)
+			addr := e.Addr << 12
+			return uimsg.ProcessSwapUnswap{
+				Timestamp: ts,
+				PID:       int(e.Pid),
+				TID:       int(e.Tid),
+				Address:   addr,
+				IsSwap:    true, // SWAP
+				ErrorCode: e.Ret,
 			}
-
-			ts := time.Unix(0, int64(e.Ts))
-
-			switch e.Type {
-			case 1: // do_swap_page
-				msg := uimsg.ProcessSwapUnswap{
-					Timestamp: ts,
-					PID:       int(e.Pid),
-					TID:       int(e.Tid),
-					Address:   e.Addr,
-					IsSwap:    false, // UNSWAP
-					ErrorCode: e.Ret,
-				}
-				send(msg)
-			case 2: // swap_writepage
-				// Need to add three zeros at the end (shift left by 12 bits = multiply by 4096)
-				addr := e.Addr << 12
-				msg := uimsg.ProcessSwapUnswap{
-					Timestamp: ts,
-					PID:       int(e.Pid),
-					TID:       int(e.Tid),
-					Address:   addr,
-					IsSwap:    true, // SWAP
-					ErrorCode: e.Ret,
-				}
-				send(msg)
-			}
+		default:
+			return nil // Unknown event type
 		}
-	}()
+	}
+
+	go ebpfshared.ProcessEventsBatched(
+		ctx,
+		reader,
+		processor,
+		collector,
+	)
 
 	cleanup := func() error {
 		reader.Close()
