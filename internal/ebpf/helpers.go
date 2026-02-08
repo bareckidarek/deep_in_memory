@@ -47,6 +47,8 @@ func ProcessEvents[T any](
 
 		var event T
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
+			// Binary deserialization failed - skip this event but continue processing others
+			// This prevents a single corrupt event from stopping the entire collector
 			continue
 		}
 
@@ -89,6 +91,8 @@ func ProcessEventsBatched[T any](
 
 		var event T
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
+			// Binary deserialization failed - skip this event but continue processing others
+			// This prevents a single corrupt event from stopping the entire collector
 			continue
 		}
 

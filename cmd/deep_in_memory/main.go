@@ -70,7 +70,11 @@ func main() {
 		})
 		// Continue without sched collector - application will still work for process listing
 	} else {
-		defer schedCleanup()
+		defer func() {
+			if err := schedCleanup(); err != nil {
+				log.Printf("Warning: sched cleanup failed: %v", err)
+			}
+		}()
 		// Convert interface{} to SharedState for eBPF mode
 		if s, ok := stateInterface.(*ebpfshared.SharedState); ok {
 			sharedState = s
@@ -80,8 +84,10 @@ func main() {
 	// Start secondary eBPF collectors with shared state
 	cleanups := startCollectors(ctx, p.Send, eventCollector, sharedState)
 	defer func() {
-		for _, cleanup := range cleanups {
-			cleanup()
+		for i, cleanup := range cleanups {
+			if err := cleanup(); err != nil {
+				log.Printf("Warning: cleanup function %d failed: %v", i, err)
+			}
 		}
 	}()
 
@@ -151,6 +157,12 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 }
 
 func clearDatabases() {
-	os.Remove("./deep_in_memory.db")
-	os.Remove("./deep_in_memory_addresses.db")
+	// Remove old database files - errors are ignored as files may not exist
+	// This ensures we start with a clean state each time
+	if err := os.Remove("./deep_in_memory.db"); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: failed to remove deep_in_memory.db: %v", err)
+	}
+	if err := os.Remove("./deep_in_memory_addresses.db"); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: failed to remove deep_in_memory_addresses.db: %v", err)
+	}
 }
