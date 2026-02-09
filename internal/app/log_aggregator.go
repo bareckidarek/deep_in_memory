@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,8 +18,11 @@ type LogEntry struct {
 	TID       int
 }
 
-// LogAggregator aggregates eBPF events for the selected process
+// LogAggregator aggregates eBPF events for the selected process.
+// Thread-safe: all public methods use mutex protection for concurrent access
+// from eBPF event handlers and UI update goroutines.
 type LogAggregator struct {
+	mu sync.Mutex // Protects all fields below
 	// Map of event type -> (address -> event info with count and TID)
 	events  map[string]map[uint64]*eventInfo
 	history []LogEntry // Last N log entries (newest first)
@@ -46,8 +50,12 @@ func NewLogAggregator() *LogAggregator {
 	}
 }
 
-// Record adds an event to the aggregator for the given PID and TID
+// Record adds an event to the aggregator for the given PID and TID.
+// Thread-safe: can be called concurrently from multiple eBPF event handlers.
 func (la *LogAggregator) Record(eventType string, addr uint64, pid, tid int) {
+	la.mu.Lock()
+	defer la.mu.Unlock()
+
 	if eventMap, ok := la.events[eventType]; ok {
 		if info, exists := eventMap[addr]; exists {
 			info.count++
@@ -58,14 +66,18 @@ func (la *LogAggregator) Record(eventType string, addr uint64, pid, tid int) {
 	}
 }
 
-// Flush creates log entries and adds them to history, then clears aggregators
+// Flush creates log entries and adds them to history, then clears aggregators.
+// Thread-safe: acquires exclusive lock to ensure atomic flush operation.
 func (la *LogAggregator) Flush(pid int) {
+	la.mu.Lock()
+	defer la.mu.Unlock()
+
 	now := time.Now()
 
 	// Process all event types
 	for eventType, addrMap := range la.events {
 		if len(addrMap) > 0 {
-			la.addToHistory(LogEntry{
+			la.addToHistoryLocked(LogEntry{
 				Timestamp: now,
 				EventType: eventType,
 				Count:     sumCounts(addrMap),
@@ -79,8 +91,10 @@ func (la *LogAggregator) Flush(pid int) {
 	}
 }
 
-// addToHistory adds a log entry to history, maintaining max size (newest first)
-func (la *LogAggregator) addToHistory(entry LogEntry) {
+// addToHistoryLocked adds a log entry to history, maintaining max size (newest first).
+// IMPORTANT: Caller MUST hold la.mu lock before calling this method.
+// This is an internal helper method called only from Flush() which already holds the lock.
+func (la *LogAggregator) addToHistoryLocked(entry LogEntry) {
 	// Prepend to keep newest at top
 	la.history = append([]LogEntry{entry}, la.history...)
 
@@ -90,8 +104,12 @@ func (la *LogAggregator) addToHistory(entry LogEntry) {
 	}
 }
 
-// GetFormattedLogs returns formatted log lines (newest first)
+// GetFormattedLogs returns formatted log lines (newest first).
+// Thread-safe: creates a safe copy of the history under lock.
 func (la *LogAggregator) GetFormattedLogs() []string {
+	la.mu.Lock()
+	defer la.mu.Unlock()
+
 	if len(la.history) == 0 {
 		return nil
 	}

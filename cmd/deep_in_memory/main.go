@@ -42,9 +42,8 @@ func main() {
 	}
 	defer addressStore.Close()
 
-	initialProcs, _ := store.All()
-
-	initial := data.BuildDataset(initialProcs)
+	// Database is always empty after clearDatabases() - start with empty dataset
+	initial := data.BuildDataset([]data.ProcessData{})
 	appModel := app.New(store, addressStore, initial, constants.DefaultRefreshInterval)
 	p := tea.NewProgram(appModel)
 
@@ -70,7 +69,10 @@ func main() {
 		})
 		// Continue without sched collector - application will still work for process listing
 	} else {
-		defer schedCleanup()
+		defer func() {
+			// Silently cleanup - TUI may already be closed during shutdown
+			schedCleanup()
+		}()
 		// Convert interface{} to SharedState for eBPF mode
 		if s, ok := stateInterface.(*ebpfshared.SharedState); ok {
 			sharedState = s
@@ -80,6 +82,7 @@ func main() {
 	// Start secondary eBPF collectors with shared state
 	cleanups := startCollectors(ctx, p.Send, eventCollector, sharedState)
 	defer func() {
+		// Silently cleanup all collectors - TUI may already be closed during shutdown
 		for _, cleanup := range cleanups {
 			cleanup()
 		}
@@ -151,6 +154,8 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 }
 
 func clearDatabases() {
+	// Remove old database files - errors are silently ignored
+	// This ensures we start with a clean state each time
 	os.Remove("./deep_in_memory.db")
 	os.Remove("./deep_in_memory_addresses.db")
 }
