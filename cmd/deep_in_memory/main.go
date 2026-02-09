@@ -42,13 +42,8 @@ func main() {
 	}
 	defer addressStore.Close()
 
-	initialProcs, err := store.All()
-	if err != nil {
-		log.Printf("Warning: failed to load initial processes from database: %v", err)
-		initialProcs = []data.ProcessData{} // Continue with empty dataset
-	}
-
-	initial := data.BuildDataset(initialProcs)
+	// Database is always empty after clearDatabases() - start with empty dataset
+	initial := data.BuildDataset([]data.ProcessData{})
 	appModel := app.New(store, addressStore, initial, constants.DefaultRefreshInterval)
 	p := tea.NewProgram(appModel)
 
@@ -75,9 +70,8 @@ func main() {
 		// Continue without sched collector - application will still work for process listing
 	} else {
 		defer func() {
-			if err := schedCleanup(); err != nil {
-				log.Printf("Warning: sched cleanup failed: %v", err)
-			}
+			// Silently cleanup - TUI may already be closed during shutdown
+			schedCleanup()
 		}()
 		// Convert interface{} to SharedState for eBPF mode
 		if s, ok := stateInterface.(*ebpfshared.SharedState); ok {
@@ -88,10 +82,9 @@ func main() {
 	// Start secondary eBPF collectors with shared state
 	cleanups := startCollectors(ctx, p.Send, eventCollector, sharedState)
 	defer func() {
-		for name, cleanup := range cleanups {
-			if err := cleanup(); err != nil {
-				log.Printf("Warning: %s collector cleanup failed: %v", name, err)
-			}
+		// Silently cleanup all collectors - TUI may already be closed during shutdown
+		for _, cleanup := range cleanups {
+			cleanup()
 		}
 	}()
 
@@ -124,8 +117,8 @@ type collectorDef struct {
 }
 
 // startCollectors launches all secondary eBPF collectors, logging warnings on failure.
-// Returns a map of cleanup functions for successfully started collectors, keyed by collector name.
-func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfshared.CentralEventCollector, state *ebpfshared.SharedState) map[string]func() error {
+// Returns a slice of cleanup functions for successfully started collectors.
+func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfshared.CentralEventCollector, state *ebpfshared.SharedState) []func() error {
 	if state == nil {
 		return nil
 	}
@@ -145,7 +138,7 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 		}},
 	}
 
-	cleanups := make(map[string]func() error)
+	var cleanups []func() error
 	for _, c := range collectors {
 		cleanup, err := c.start(ctx, collector, state)
 		if err != nil {
@@ -155,18 +148,14 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 			})
 			continue
 		}
-		cleanups[c.name] = cleanup
+		cleanups = append(cleanups, cleanup)
 	}
 	return cleanups
 }
 
 func clearDatabases() {
-	// Remove old database files - errors are ignored as files may not exist
+	// Remove old database files - errors are silently ignored
 	// This ensures we start with a clean state each time
-	if err := os.Remove("./deep_in_memory.db"); err != nil && !os.IsNotExist(err) {
-		log.Printf("Warning: failed to remove deep_in_memory.db: %v", err)
-	}
-	if err := os.Remove("./deep_in_memory_addresses.db"); err != nil && !os.IsNotExist(err) {
-		log.Printf("Warning: failed to remove deep_in_memory_addresses.db: %v", err)
-	}
+	os.Remove("./deep_in_memory.db")
+	os.Remove("./deep_in_memory_addresses.db")
 }

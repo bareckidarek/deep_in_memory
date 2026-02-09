@@ -152,16 +152,10 @@ func (h *DBHelper) HandleProcessExec(ev uimsg.ProcessExec) error {
 func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 	key := pidKey(ev.PID)
 
-	// Delete from both databases
-	if err := h.db.Delete(key); err != nil {
-		h.reportError(fmt.Errorf("failed to delete process %d from main DB: %w", ev.PID, err))
-		// Continue to try deleting from address DB even if main DB delete fails
-	}
-
-	// Also delete from address database
-	if err := h.addressDB.Delete(key); err != nil {
-		h.reportError(fmt.Errorf("failed to delete process %d from address DB: %w", ev.PID, err))
-	}
+	// Delete from both databases - errors are silently ignored as this can
+	// occur for any process in the OS, including those not being tracked
+	h.db.Delete(key)
+	h.addressDB.Delete(key)
 
 	return nil
 }
