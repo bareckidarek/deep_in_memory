@@ -39,16 +39,16 @@ type Model struct {
 	modalMessage string
 
 	// Physical memory section state
-	physicalInput      textinput.Model       // Text input for virtual address
-	physicalFocused    bool                  // Whether physical input is focused
-	suggestions        []string              // Current address suggestions
-	selectedSuggestion int                   // Currently highlighted suggestion (-1 = none)
-	showSuggestions    bool                  // Whether suggestions dropdown is visible
-	pagemapResult      []string              // Pagemap lookup result lines
-	pagemapPFN         uint64                // Last looked-up PFN
-	pagemapHasPFN      bool                  // Whether we have a valid PFN
-	iomemRanges        []uimsg.IomemRangeMsg // Parsed /proc/iomem data
-	physicalScrollOff  int                   // Scroll offset for right column (iomem)
+	physicalInput      textinput.Model           // Text input for virtual address
+	physicalFocused    bool                      // Whether physical input is focused
+	suggestions        []uirender.SuggestionItem // Current address suggestions with status
+	selectedSuggestion int                       // Currently highlighted suggestion (-1 = none)
+	showSuggestions    bool                      // Whether suggestions dropdown is visible
+	pagemapResult      []string                  // Pagemap lookup result lines
+	pagemapPFN         uint64                    // Last looked-up PFN
+	pagemapHasPFN      bool                      // Whether we have a valid PFN
+	iomemRanges        []uimsg.IomemRangeMsg     // Parsed /proc/iomem data
+	physicalScrollOff  int                       // Scroll offset for right column (iomem)
 }
 
 // New constructs a Model from dataset.
