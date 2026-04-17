@@ -32,7 +32,7 @@ const (
 	RangesPerPage = 25
 
 	// Display constants
-	StatusLegendWidth = 59 // "██ reservation  ██ allocation  ██ page-out  ██ page-in" = 59 chars visible
+	StatusLegendWidth = 79 // "██ virtual memory mapping  ██ lazy physical allocation  ██ page-out  ██ page-in" = 59 chars visible
 
 	// Matrix display
 	MatrixColumns = 8
@@ -116,8 +116,8 @@ var StatusOrder = []string{"SWAP", "UNSWAP", "INIT"}
 
 // Memory status labels for display
 const (
-	StatusReservation = "reservation"
-	StatusAllocation  = "allocation"
+	StatusReservation = "virtual memory mapping"
+	StatusAllocation  = "lazy physical allocation"
 	StatusPageOut     = "page-out"
 	StatusPageIn      = "page-in"
 )

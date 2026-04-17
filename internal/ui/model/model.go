@@ -39,16 +39,29 @@ type Model struct {
 	modalMessage string
 
 	// Physical memory section state
-	physicalInput      textinput.Model       // Text input for virtual address
-	physicalFocused    bool                  // Whether physical input is focused
-	suggestions        []string              // Current address suggestions
-	selectedSuggestion int                   // Currently highlighted suggestion (-1 = none)
-	showSuggestions    bool                  // Whether suggestions dropdown is visible
-	pagemapResult      []string              // Pagemap lookup result lines
-	pagemapPFN         uint64                // Last looked-up PFN
-	pagemapHasPFN      bool                  // Whether we have a valid PFN
-	iomemRanges        []uimsg.IomemRangeMsg // Parsed /proc/iomem data
-	physicalScrollOff  int                   // Scroll offset for right column (iomem)
+	physicalInput      textinput.Model           // Text input for virtual address
+	physicalFocused    bool                      // Whether physical input is focused
+	suggestions        []uirender.SuggestionItem // Current address suggestions with status
+	selectedSuggestion int                       // Currently highlighted suggestion (-1 = none)
+	showSuggestions    bool                      // Whether suggestions dropdown is visible
+	pagemapResult      []string                  // Pagemap lookup result lines
+	pagemapPFN         uint64                    // Last looked-up PFN
+	pagemapHasPFN      bool                      // Whether we have a valid PFN
+	iomemRanges        []uimsg.IomemRangeMsg     // Parsed /proc/iomem data
+	physicalScrollOff  int                       // Scroll offset for right column (iomem)
+
+	// Performance optimizations - cache styles and viewport content
+	virtualStyle        lipgloss.Style // Cached style for virtual memory box
+	physicalStyle       lipgloss.Style // Cached style for physical memory box
+	logsStyle           lipgloss.Style // Cached style for logs box
+	cachedVirtual       string         // Cached viewport.View() for virtual memory
+	cachedPhysical      string         // Cached viewport.View() for physical memory
+	cachedLogs          string         // Cached viewport.View() for logs
+	cachedView          string         // Cached entire View() output
+	dirty               bool           // Whether view needs re-rendering
+	lastAvailable       int            // Last available width for style cache
+	lastRowHeight       int            // Last row height for style cache
+	lastSecondRowHeight int            // Last second row height for style cache
 }
 
 // New constructs a Model from dataset.
@@ -80,6 +93,7 @@ func New(d data.Dataset) *Model {
 		physicalInput:      ti,
 		physicalFocused:    false,
 		selectedSuggestion: -1,
+		dirty:              true, // Initial render needed
 	}
 
 	// Initialize logs viewport with default content
@@ -114,6 +128,7 @@ func (m *Model) SetDataset(d data.Dataset) {
 	m.data = d
 	m.refreshList()
 	m.syncLayout()
+	m.dirty = true
 }
 
 // SetTargetPIDSetter provides a callback used to push the selected PID into eBPF maps.
@@ -150,11 +165,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.viewportLogs.SetContent(strings.Join(lines, "\n"))
 		}
+		// Cache viewport content and mark dirty
+		m.cachedLogs = m.viewportLogs.View()
+		m.dirty = true
 		return m, nil
 
 	case uimsg.IomemLoadResponse:
 		m.iomemRanges = msg.Ranges
 		m.syncLayout()
+		m.dirty = true
 		return m, nil
 
 	case uimsg.PagemapLookupResponse:
@@ -165,6 +184,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.HasPFN {
 			m.physicalScrollOff = 0
 		}
+		m.dirty = true
 		m.syncLayout()
 		return m, nil
 
@@ -182,6 +202,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Return focus to process list
 			m.physicalFocused = false
 			m.physicalInput.Blur()
+			m.dirty = true
 			m.syncLayout()
 		}
 		return m, nil
@@ -198,6 +219,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modalType = constants.ModalTypeInfo
 		}
 		m.modalMessage = msg.Message
+		m.dirty = true
 
 		// Hide modal after configured duration
 		return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
@@ -215,6 +237,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.physicalInput.CursorEnd()
 			m.updateSuggestions()
 			m.syncLayout()
+			m.dirty = true
 		}
 		return m, nil
 	case tea.KeyPressMsg:
@@ -229,21 +252,38 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.list.SetSize(constants.ListWidthFallback, max(m.height-2, constants.DefaultListHeight))
+		m.dirty = true
 		m.syncLayout()
 	}
 
 	var cmdList tea.Cmd
+	oldList := m.list
 	m.list, cmdList = m.list.Update(msg)
 
 	// Update focused PID based on cursor position (not selection)
 	if sel, ok := m.list.SelectedItem().(listItem); ok {
-		m.focusedPID = sel.pid
+		if m.focusedPID != sel.pid {
+			m.focusedPID = sel.pid
+			m.dirty = true // List cursor moved - re-render needed
+		}
+	}
+
+	// Mark dirty if list state changed (scrolling, filtering, etc.)
+	if oldList.Index() != m.list.Index() {
+		m.dirty = true
 	}
 
 	return m, cmdList
 }
 
 func (m *Model) View() tea.View {
+	// Use cached view if nothing changed
+	if !m.dirty && m.cachedView != "" {
+		view := tea.NewView(m.cachedView)
+		view.AltScreen = true
+		return view
+	}
+
 	var content string
 	if m.err != nil {
 		content = fmt.Sprintf("error: %v", m.err)
@@ -258,6 +298,10 @@ func (m *Model) View() tea.View {
 	if m.showModal {
 		content = m.renderWithModal(content)
 	}
+
+	// Cache the rendered view
+	m.cachedView = content
+	m.dirty = false
 
 	view := tea.NewView(content)
 	view.AltScreen = true

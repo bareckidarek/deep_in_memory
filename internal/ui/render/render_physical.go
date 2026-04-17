@@ -10,13 +10,19 @@ import (
 	"deep_in_memory/internal/constants"
 )
 
+// SuggestionItem represents a single address suggestion with its memory status.
+type SuggestionItem struct {
+	Address string // Virtual address (e.g., "0x12345000")
+	Status  string // Memory status: "" (reserved only), "INIT", "SWAP", "UNSWAP"
+}
+
 // PhysicalMemoryState holds all data needed to render the physical memory section.
 type PhysicalMemoryState struct {
-	InputView          string              // Rendered text input
-	Focused            bool                // Whether the input is focused
-	Suggestions        []string            // Address suggestions
-	SelectedSuggestion int                 // Currently highlighted suggestion (-1 = none)
-	ShowSuggestions    bool                // Whether to show suggestions
+	InputView          string            // Rendered text input
+	Focused            bool              // Whether the input is focused
+	Suggestions        []SuggestionItem  // Address suggestions with status
+	SelectedSuggestion int               // Currently highlighted suggestion (-1 = none)
+	ShowSuggestions    bool              // Whether to show suggestions
 	PagemapResult      []string            // Pagemap lookup result lines
 	PagemapPFN         uint64              // PFN from last lookup
 	HasPFN             bool                // Whether PFN is valid
@@ -141,29 +147,46 @@ func renderLeftColumn(state PhysicalMemoryState, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderSuggestions renders the suggestion dropdown.
-func renderSuggestions(suggestions []string, selected int, width int) string {
+// renderSuggestions renders the suggestion dropdown with colored backgrounds based on memory status.
+func renderSuggestions(suggestions []SuggestionItem, selected int, width int) string {
 	var lines []string
-	normalStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#cccccc")).
-		Background(lipgloss.Color("#333333"))
-	selectedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#000000")).
-		Background(lipgloss.Color("#00af5f")).
-		Bold(true)
 
-	for i, s := range suggestions {
-		// Pad suggestion to width
-		padded := s
-		if len(padded) < width-2 {
-			padded += strings.Repeat(" ", width-2-len(padded))
+	for i, item := range suggestions {
+		// Determine background color based on status
+		var bgColor string
+		switch item.Status {
+		case "INIT":
+			bgColor = constants.GreenColor
+		case "SWAP":
+			bgColor = constants.RedColor
+		case "UNSWAP":
+			bgColor = constants.BlueColor
+		default: // Reserved (no specific status)
+			bgColor = constants.GrayColor
 		}
 
+		// Base style with status-based background
+		style := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#000000")).
+			Background(lipgloss.Color(bgColor))
+
+		// Add marker and bold for selected item
+		prefix := "  "
 		if i == selected {
-			lines = append(lines, selectedStyle.Render(" "+padded+" "))
-		} else {
-			lines = append(lines, normalStyle.Render(" "+padded+" "))
+			prefix = "► "
+			style = style.Bold(true).Foreground(lipgloss.Color("#ffffff"))
 		}
+
+		// Build display text
+		displayText := prefix + item.Address
+
+		// Pad to width
+		textLen := len(prefix) + len(item.Address)
+		if textLen < width-2 {
+			displayText += strings.Repeat(" ", width-2-textLen)
+		}
+
+		lines = append(lines, style.Render(" "+displayText+" "))
 	}
 	return strings.Join(lines, "\n")
 }
