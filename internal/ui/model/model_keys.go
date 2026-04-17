@@ -38,6 +38,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 						m.showModal = true
 						m.modalType = constants.ModalTypeError
 						m.modalMessage = fmt.Sprintf("Failed to set target PID %d in eBPF: %v", sel.pid, err)
+						m.dirty = true
 						// Don't proceed with success modal
 						return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
 							return uimsg.HideModalMsg{}
@@ -50,6 +51,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 				m.showModal = true
 				m.modalType = constants.ModalTypeInfo
 				m.modalMessage = fmt.Sprintf("Selected process %d", sel.pid)
+				m.dirty = true
 
 				// Send message to load smaps for this process and hide modal after configured duration
 				return m, tea.Batch(
@@ -68,6 +70,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 			if m.selectedPID != 0 {
 				m.rangesPage++
 				m.syncLayout()
+				m.dirty = true
 			}
 			return m, nil
 		},
@@ -76,6 +79,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 			if m.selectedPID != 0 && m.rangesPage > 0 {
 				m.rangesPage--
 				m.syncLayout()
+				m.dirty = true
 			}
 			return m, nil
 		},
@@ -84,6 +88,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 			m.showModal = true
 			m.modalType = constants.ModalTypeError
 			m.modalMessage = "Test error message - this is a red error popup!"
+			m.dirty = true
 
 			return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
 				return uimsg.HideModalMsg{}
@@ -94,6 +99,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 			m.showModal = true
 			m.modalType = constants.ModalTypeWarn
 			m.modalMessage = "Test warning message - this is an orange warning popup!"
+			m.dirty = true
 
 			return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
 				return uimsg.HideModalMsg{}
@@ -105,6 +111,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 				m.physicalFocused = true
 				m.physicalInput.Focus()
 				m.updateSuggestions()
+				m.dirty = true
 			}
 			return m, nil
 		},
@@ -116,6 +123,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 					m.physicalScrollOff = len(m.iomemRanges) - 1
 				}
 				m.syncLayout()
+				m.dirty = true
 			}
 			return m, nil
 		},
@@ -127,6 +135,7 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 					m.physicalScrollOff = 0
 				}
 				m.syncLayout()
+				m.dirty = true
 			}
 			return m, nil
 		},

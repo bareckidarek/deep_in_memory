@@ -104,6 +104,26 @@ func (la *LogAggregator) addToHistoryLocked(entry LogEntry) {
 	}
 }
 
+// formatEventType converts internal event type names to display names
+func formatEventType(eventType string) string {
+	switch eventType {
+	case "brk":
+		return "virtual memory mapping [brk]"
+	case "mmap":
+		return "virtual memory mapping [mmap]"
+	case "munmap":
+		return "virtual memory unmapping [munmap]"
+	case "page_fault":
+		return "lazy physical allocation"
+	case "swap_write":
+		return "page_out"
+	case "swap_read":
+		return "page_in"
+	default:
+		return eventType
+	}
+}
+
 // GetFormattedLogs returns formatted log lines (newest first).
 // Thread-safe: creates a safe copy of the history under lock.
 func (la *LogAggregator) GetFormattedLogs() []string {
@@ -118,8 +138,9 @@ func (la *LogAggregator) GetFormattedLogs() []string {
 	for i, entry := range la.history {
 		timestamp := entry.Timestamp.Format("2006-01-02 15:04:05")
 		addrStr := formatAddressRanges(entry.Addresses)
+		displayType := formatEventType(entry.EventType)
 		lines[i] = fmt.Sprintf("%s | PID:%d, TID:%d | %s -> count: %d, addresses: %s",
-			timestamp, entry.PID, entry.TID, entry.EventType, entry.Count, addrStr)
+			timestamp, entry.PID, entry.TID, displayType, entry.Count, addrStr)
 	}
 	return lines
 }

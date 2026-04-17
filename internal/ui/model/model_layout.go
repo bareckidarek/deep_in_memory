@@ -68,34 +68,51 @@ func (m *Model) layoutMetrics() (available, rowHeight, secondRowHeight, barWidth
 	return
 }
 
-func (m *Model) renderSplitDetails() string {
-	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
+// updateStyles recreates lipgloss styles only when layout dimensions change.
+// This prevents recreating styles on every View() call, significantly reducing CPU usage.
+func (m *Model) updateStyles(available, rowHeight, secondRowHeight int) {
+	if m.lastAvailable == available &&
+		m.lastRowHeight == rowHeight &&
+		m.lastSecondRowHeight == secondRowHeight {
+		return
+	}
 
-	// Virtual memory box (top) - subtract 2 for border
-	virtualBox := lipgloss.NewStyle().
+	halfWidth := available / 2
+
+	m.virtualStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
 		Width(available).
-		Height(rowHeight - 2).
-		Render(m.viewportVirtual.View())
+		Height(rowHeight - 2)
 
-	// Split second row horizontally: 50% physical memory, 50% logs
-	halfWidth := available / 2
-
-	// Physical and logs boxes - subtract 2 for border
-	physicalBox := lipgloss.NewStyle().
+	m.physicalStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
 		Width(halfWidth).
-		Height(secondRowHeight - 2).
-		Render(m.viewportPhysical.View())
+		Height(secondRowHeight - 2)
 
-	logsBox := lipgloss.NewStyle().
+	m.logsStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
 		Width(available - halfWidth).
-		Height(secondRowHeight - 2).
-		Render(m.viewportLogs.View())
+		Height(secondRowHeight - 2)
+
+	m.lastAvailable = available
+	m.lastRowHeight = rowHeight
+	m.lastSecondRowHeight = secondRowHeight
+	m.dirty = true
+}
+
+func (m *Model) renderSplitDetails() string {
+	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
+
+	// Update cached styles only if dimensions changed
+	m.updateStyles(available, rowHeight, secondRowHeight)
+
+	// Use cached viewport content
+	virtualBox := m.virtualStyle.Render(m.cachedVirtual)
+	physicalBox := m.physicalStyle.Render(m.cachedPhysical)
+	logsBox := m.logsStyle.Render(m.cachedLogs)
 
 	secondRow := lipgloss.JoinHorizontal(lipgloss.Top, physicalBox, logsBox)
 	stack := lipgloss.JoinVertical(lipgloss.Left, virtualBox, secondRow)
@@ -151,6 +168,12 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth, m.rangesPage, virtualWidth))
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(m.buildPhysicalMemoryState(physicalWidth, physicalHeight)))
 	// Logs content is updated via FlushLogsMsg timer
+
+	// Cache viewport content for performance
+	m.cachedVirtual = m.viewportVirtual.View()
+	m.cachedPhysical = m.viewportPhysical.View()
+	m.cachedLogs = m.viewportLogs.View()
+	m.dirty = true
 }
 
 func (m *Model) clearViewports() {
@@ -194,6 +217,12 @@ func (m *Model) clearViewports() {
 	m.viewportVirtual.SetContent(uirender.StyleTitle("[virtual memory]") + "\n\nNo process selected.\nPress Enter on a process to view details.")
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(m.buildPhysicalMemoryState(physicalWidth, physicalHeight)))
 	// Don't clear logs - they persist independently of selected process
+
+	// Cache viewport content for performance
+	m.cachedVirtual = m.viewportVirtual.View()
+	m.cachedPhysical = m.viewportPhysical.View()
+	m.cachedLogs = m.viewportLogs.View()
+	m.dirty = true
 }
 
 // renderSummary creates a formatted summary header showing process information

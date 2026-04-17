@@ -21,6 +21,7 @@ func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.physicalInput.Blur()
 		m.showSuggestions = false
 		m.selectedSuggestion = -1
+		m.dirty = true
 		return m, nil
 
 	case "tab":
@@ -29,6 +30,7 @@ func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.physicalInput.Blur()
 		m.showSuggestions = false
 		m.selectedSuggestion = -1
+		m.dirty = true
 		return m, nil
 
 	case "enter":
@@ -38,6 +40,7 @@ func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.physicalInput.CursorEnd() // Move cursor to end of selected address
 			m.showSuggestions = false
 			m.selectedSuggestion = -1
+			m.dirty = true
 		}
 		// Perform pagemap lookup
 		return m.performPagemapLookup()
@@ -48,6 +51,8 @@ func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.selectedSuggestion >= len(m.suggestions) {
 				m.selectedSuggestion = 0
 			}
+			m.syncLayout()
+			m.dirty = true
 			return m, nil
 		}
 
@@ -57,6 +62,8 @@ func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.selectedSuggestion < 0 {
 				m.selectedSuggestion = len(m.suggestions) - 1
 			}
+			m.syncLayout()
+			m.dirty = true
 			return m, nil
 		}
 
@@ -72,6 +79,7 @@ func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.updateSuggestions()
 
 	m.syncLayout()
+	m.dirty = true
 	return m, cmd
 }
 

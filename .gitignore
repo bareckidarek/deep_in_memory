@@ -1,2 +1,17 @@
 # Ignore the deep_in_memory.db file
-deep_in_memory.db
+deep_in_memory*.db
+
+# Ignore playground folder
+playground/
+
+# Ignore test folder
+test/
+
+#Ignore bin folder
+bin/
+
+#Ignore binary
+deep_in_memory
+
+#Ignore coverage reports
+coverage.out
