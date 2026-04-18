@@ -97,6 +97,9 @@ func New(d data.Dataset) *Model {
 		dirty:              true, // Initial render needed
 	}
 
+	// Initialize logs viewport with default content
+	m.viewportLogs.SetContent(uirender.RenderLogsSectionContent(nil, m.viewportLogs.Width(), m.logsWrap))
+
 	items := make([]list.Item, 0, len(d.Order))
 	for _, pid := range d.Order {
 		items = append(items, renderListItem(d.Processes[pid].Proc, pid))
@@ -142,7 +145,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case uimsg.LogsResponseMsg:
 		// Update logs viewport with received logs
-		m.viewportLogs.SetContent(uirender.RenderLogsSectionContent(msg.Logs, m.viewportLogs.Width()))
+		m.viewportLogs.SetContent(uirender.RenderLogsSectionContent(msg.Logs, m.viewportLogs.Width(), m.logsWrap))
 		// Cache viewport content and mark dirty
 		m.cachedLogs = m.viewportLogs.View()
 		m.dirty = true
