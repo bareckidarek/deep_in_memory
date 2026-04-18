@@ -95,20 +95,4 @@ func parseIomemLine(line string) (IomemRange, bool) {
 	}, true
 }
 
-// FormatIomemRange returns a formatted string representation of an IomemRange.
-func FormatIomemRange(r IomemRange) string {
-	indent := strings.Repeat("  ", r.Level)
-	return fmt.Sprintf("%s%016x-%016x : %s", indent, r.Start, r.End, r.Name)
-}
 
-// FindIomemRangeForPFN finds which iomem range contains the given PFN (page frame number).
-// Returns the index of the matching range, or -1 if not found.
-func FindIomemRangeForPFN(ranges []IomemRange, pfn uint64) int {
-	physAddr := pfn * PageSizeBytes
-	for i, r := range ranges {
-		if physAddr >= r.Start && physAddr <= r.End {
-			return i
-		}
-	}
-	return -1
-}

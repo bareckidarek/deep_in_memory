@@ -153,7 +153,8 @@ func extractLabel(fields []string, line string) string {
 	}
 }
 
-// and converts it to page count (dividing by 4 kB per page).
+// parseKBToPages parses a "Rss:" or "Swap:" line from /proc/PID/smaps
+// and converts it to page count (dividing by the system page size).
 func parseKBToPages(line string) int {
 	// Expected format: "Rss:                  12 kB" or "Swap:     0 kB"
 	fields := strings.Fields(line)

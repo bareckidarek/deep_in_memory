@@ -83,28 +83,6 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		},
-		"E": func() (tea.Model, tea.Cmd) {
-			// Test error popup (capital E for debug)
-			m.showModal = true
-			m.modalType = constants.ModalTypeError
-			m.modalMessage = "Test error message - this is a red error popup!"
-			m.dirty = true
-
-			return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
-				return uimsg.HideModalMsg{}
-			})
-		},
-		"W": func() (tea.Model, tea.Cmd) {
-			// Test warning popup (capital W for debug)
-			m.showModal = true
-			m.modalType = constants.ModalTypeWarn
-			m.modalMessage = "Test warning message - this is an orange warning popup!"
-			m.dirty = true
-
-			return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
-				return uimsg.HideModalMsg{}
-			})
-		},
 		"tab": func() (tea.Model, tea.Cmd) {
 			// Toggle focus to physical memory input
 			if m.selectedPID != 0 {

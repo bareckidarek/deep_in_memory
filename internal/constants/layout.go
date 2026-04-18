@@ -21,7 +21,6 @@ const (
 	MinBarWidth        = 10
 	MinContentHeight   = 6
 	MinViewportHeight  = 3
-	StatusBarReduction = 4
 	BarWidthBuffer     = 50
 
 	// Layout percentages
@@ -33,13 +32,6 @@ const (
 
 	// Display constants
 	StatusLegendWidth = 79 // "██ virtual memory mapping  ██ lazy physical allocation  ██ page-out  ██ page-in" = 59 chars visible
-
-	// Matrix display
-	MatrixColumns = 8
-	MatrixMaxRows = 6
-
-	// Phase sampling
-	PhaseSampleLimit = 5
 )
 
 // Event constants for eBPF tracepoints

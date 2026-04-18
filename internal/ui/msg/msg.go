@@ -98,21 +98,11 @@ type ApplicationError struct {
 // HideModalMsg is sent after the modal timeout to hide the modal.
 type HideModalMsg struct{}
 
-// FlushLogsMsg is sent periodically to flush aggregated logs to the UI.
-type FlushLogsMsg struct{}
-
 // GetLogsMsg requests current logs from app layer.
 type GetLogsMsg struct{}
 
-// LogsResponseMsg contains formatted log entries for display.
 type LogsResponseMsg struct {
 	Logs []string // Pre-formatted log lines with timestamps
-}
-
-// EventBatch contains multiple events batched together for efficient processing.
-// Used by eBPF collectors to reduce the number of messages sent to Bubble Tea.
-type EventBatch struct {
-	Messages []interface{} // Slice of event messages (ProcessMmap, ProcessPageFault, etc.)
 }
 
 // PagemapLookupRequest is sent when user submits a virtual address for pagemap lookup.
