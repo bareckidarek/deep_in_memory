@@ -139,5 +139,12 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		},
+		"w": func() (tea.Model, tea.Cmd) {
+			// Toggle word-wrap in logs viewport
+			m.logsWrap = !m.logsWrap
+			// Re-request logs so the viewport rebuilds with new wrap setting
+			m.dirty = true
+			return m, func() tea.Msg { return uimsg.GetLogsMsg{} }
+		},
 	}
 }

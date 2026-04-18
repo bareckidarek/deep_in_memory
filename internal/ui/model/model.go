@@ -48,6 +48,9 @@ type Model struct {
 	iomemRanges        []uimsg.IomemRangeMsg     // Parsed /proc/iomem data
 	physicalScrollOff  int                       // Scroll offset for right column (iomem)
 
+	// Logs display
+	logsWrap bool // Whether log lines are word-wrapped
+
 	// Performance optimizations - cache styles and viewport content
 	virtualStyle        lipgloss.Style // Cached style for virtual memory box
 	physicalStyle       lipgloss.Style // Cached style for physical memory box
@@ -93,9 +96,6 @@ func New(d data.Dataset) *Model {
 		selectedSuggestion: -1,
 		dirty:              true, // Initial render needed
 	}
-
-	// Initialize logs viewport with default content
-	m.viewportLogs.SetContent("[logs]\n\nNo events recorded")
 
 	items := make([]list.Item, 0, len(d.Order))
 	for _, pid := range d.Order {
