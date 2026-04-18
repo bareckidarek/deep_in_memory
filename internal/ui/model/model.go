@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/list"
@@ -10,7 +9,6 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
@@ -144,27 +142,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case uimsg.LogsResponseMsg:
 		// Update logs viewport with received logs
-		if len(msg.Logs) == 0 {
-			styledTitle := uirender.StyleTitle("[logs]")
-			m.viewportLogs.SetContent(styledTitle + "\n\nNo events recorded")
-		} else {
-			var lines []string
-			lines = append(lines, uirender.StyleTitle("[logs]"))
-			lines = append(lines, "") // Empty line after header
-
-			// Word wrap each log line to viewport width
-			for _, log := range msg.Logs {
-				// Wrap line if it exceeds viewport width
-				if m.viewportLogs.Width() > 0 {
-					wrapped := ansi.Wordwrap(log, m.viewportLogs.Width(), "")
-					lines = append(lines, wrapped)
-				} else {
-					lines = append(lines, log)
-				}
-			}
-
-			m.viewportLogs.SetContent(strings.Join(lines, "\n"))
-		}
+		m.viewportLogs.SetContent(uirender.RenderLogsSectionContent(msg.Logs, m.viewportLogs.Width()))
 		// Cache viewport content and mark dirty
 		m.cachedLogs = m.viewportLogs.View()
 		m.dirty = true
@@ -296,7 +274,7 @@ func (m *Model) View() tea.View {
 
 	// If modal is active, overlay it on top of the content
 	if m.showModal {
-		content = m.renderWithModal(content)
+		content = uirender.RenderWithModal(content, m.modalType, m.modalMessage, m.width, m.height)
 	}
 
 	// Cache the rendered view
@@ -306,105 +284,4 @@ func (m *Model) View() tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
 	return view
-}
-
-// renderWithModal overlays a modal/notification dialog on top of the main content.
-func (m *Model) renderWithModal(baseContent string) string {
-	// Create modal box styled based on notification type
-	var bgColor string
-	switch m.modalType {
-	case constants.ModalTypeInfo:
-		bgColor = "12" // Blue
-	case constants.ModalTypeWarn:
-		bgColor = "214" // Orange
-	case constants.ModalTypeError:
-		bgColor = "9" // Red
-	default:
-		bgColor = "12" // Default to blue
-	}
-
-	// Create 3-line modal with text in the middle line
-	horizontalPadding := 5
-	textWidth := lipgloss.Width(m.modalMessage)
-	totalWidth := textWidth + (horizontalPadding * 2)
-
-	emptyLine := strings.Repeat(" ", totalWidth)
-	centeredText := strings.Repeat(" ", horizontalPadding) + m.modalMessage + strings.Repeat(" ", horizontalPadding)
-
-	modalLines := []string{
-		emptyLine,
-		centeredText,
-		emptyLine,
-	}
-
-	modalStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color(bgColor)).
-		Foreground(lipgloss.Color("#000000")).
-		Bold(true)
-
-	var styledLines []string
-	for _, line := range modalLines {
-		styledLines = append(styledLines, modalStyle.Render(line))
-	}
-
-	modalHeight := len(styledLines)
-	modalWidth := lipgloss.Width(styledLines[0])
-
-	baseLines := strings.Split(baseContent, "\n")
-	if len(baseLines) > m.height {
-		baseLines = baseLines[:m.height]
-	}
-
-	modalY := constants.ModalTopOffset
-	if modalY < 0 {
-		modalY = 0
-	}
-
-	modalX := (m.width - modalWidth) / 2
-	if modalX < 0 {
-		modalX = 0
-	}
-
-	var outputLines []string
-
-	for i := 0; i < m.height; i++ {
-		var baseLine string
-		if i < len(baseLines) {
-			baseLine = baseLines[i]
-		} else {
-			baseLine = strings.Repeat(" ", m.width)
-		}
-
-		visualWidth := ansi.StringWidth(baseLine)
-		if visualWidth < m.width {
-			baseLine += strings.Repeat(" ", m.width-visualWidth)
-		}
-
-		if i >= modalY && i < modalY+modalHeight {
-			modalLineIdx := i - modalY
-			modalLine := styledLines[modalLineIdx]
-			modalLineWidth := lipgloss.Width(modalLine)
-
-			leftPart := ""
-			if modalX > 0 {
-				leftPart = ansi.Truncate(baseLine, modalX, "")
-			}
-
-			rightPart := ""
-			skipChars := modalX + modalLineWidth
-			if skipChars < visualWidth {
-				fullWidth := ansi.StringWidth(baseLine)
-				charsToKeep := fullWidth - skipChars
-				if charsToKeep > 0 {
-					rightPart = ansi.TruncateLeft(baseLine, skipChars, "")
-				}
-			}
-
-			outputLines = append(outputLines, leftPart+modalLine+rightPart)
-		} else {
-			outputLines = append(outputLines, baseLine)
-		}
-	}
-
-	return strings.Join(outputLines, "\n")
 }

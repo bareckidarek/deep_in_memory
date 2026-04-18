@@ -4,12 +4,85 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
 )
+
+// RenderVirtualEmptyContent returns the virtual memory section text shown when no process is selected.
+func RenderVirtualEmptyContent() string {
+	return StyleTitle("[virtual memory]") + "\n\nNo process selected.\nPress Enter on a process to view details."
+}
+
+// RenderSummary creates a formatted summary header showing process information
+// and memory statistics including reservation, allocation, page-out, and page-in counts.
+// Returns a styled table with color-coded columns for different memory statuses.
+func RenderSummary(proc data.Process, pd *data.ProcessData) string {
+	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
+	stats := CalculateStatusStats(pd)
+
+	// Build header
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Process: %s (%d)\n", proc.Name, proc.PID))
+	sb.WriteString(fmt.Sprintf("Start (UTC): %s\n\n", startUTC))
+
+	// Define column widths
+	labelWidth := 8
+	col1Width := 36
+	col2Width := 30
+	col3Width := 24
+	col4Width := 24
+
+	// Create styles
+	borderStyle := lipgloss.NewStyle().Border(lipgloss.NormalBorder())
+	labelStyle := lipgloss.NewStyle().Width(labelWidth)
+	col1Style := lipgloss.NewStyle().Width(col1Width).Foreground(lipgloss.Color(constants.GrayColor))
+	col2Style := lipgloss.NewStyle().Width(col2Width).Foreground(lipgloss.Color(constants.GreenColor))
+	col3Style := lipgloss.NewStyle().Width(col3Width).Foreground(lipgloss.Color(constants.RedColor))
+	col4Style := lipgloss.NewStyle().Width(col4Width).Foreground(lipgloss.Color(constants.BlueColor))
+
+	// Build table rows
+	headerRow := lipgloss.JoinHorizontal(lipgloss.Top,
+		labelStyle.Render(""),
+		col1Style.Render(constants.StatusReservation),
+		col2Style.Render(constants.StatusAllocation),
+		col3Style.Render(constants.StatusPageOut),
+		col4Style.Render(constants.StatusPageIn),
+	)
+
+	pagesRow := lipgloss.JoinHorizontal(lipgloss.Top,
+		labelStyle.Render("pages"),
+		col1Style.Render(fmt.Sprintf("%d", stats.Reservation)),
+		col2Style.Render(fmt.Sprintf("%d", stats.Allocation)),
+		col3Style.Render(fmt.Sprintf("%d", stats.PageOut)),
+		col4Style.Render(fmt.Sprintf("%d", stats.PageIn)),
+	)
+
+	reservationBytes := stats.Reservation * data.PageSizeBytes
+	allocationBytes := stats.Allocation * data.PageSizeBytes
+	pageOutBytes := stats.PageOut * data.PageSizeBytes
+	pageInBytes := stats.PageIn * data.PageSizeBytes
+
+	sizeRow := lipgloss.JoinHorizontal(lipgloss.Top,
+		labelStyle.Render("size"),
+		col1Style.Render(HumanBytes(int64(reservationBytes))),
+		col2Style.Render(HumanBytes(int64(allocationBytes))),
+		col3Style.Render(HumanBytes(int64(pageOutBytes))),
+		col4Style.Render(HumanBytes(int64(pageInBytes))),
+	)
+
+	// Join all rows vertically and apply border to the entire table
+	table := lipgloss.JoinVertical(lipgloss.Left, headerRow, pagesRow, sizeRow)
+	borderedTable := borderStyle.Render(table)
+
+	sb.WriteString(borderedTable)
+	sb.WriteString("\n")
+
+	return sb.String()
+}
 
 // RenderVirtualSectionContent builds the virtual memory section text.
 func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int, page int, viewportWidth int) string {
