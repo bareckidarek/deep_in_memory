@@ -113,7 +113,7 @@ func main() {
 // collectorDef describes a secondary eBPF collector to start.
 type collectorDef struct {
 	name  string
-	start func(ctx context.Context, collector *ebpfshared.CentralEventCollector, state interface{}) (func() error, error)
+	start func(ctx context.Context, collector *ebpfshared.CentralEventCollector, state *ebpfshared.SharedState) (func() error, error)
 }
 
 // startCollectors launches all secondary eBPF collectors, logging warnings on failure.
@@ -124,17 +124,17 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 	}
 
 	collectors := []collectorDef{
-		{"mmap", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s interface{}) (func() error, error) {
-			return mmap.Start(ctx, col, s.(*ebpfshared.SharedState))
+		{"mmap", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
+			return mmap.Start(ctx, col, s)
 		}},
-		{"brk", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s interface{}) (func() error, error) {
-			return brk.Start(ctx, col, s.(*ebpfshared.SharedState))
+		{"brk", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
+			return brk.Start(ctx, col, s)
 		}},
-		{"page_fault", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s interface{}) (func() error, error) {
-			return page_fault.Start(ctx, col, s.(*ebpfshared.SharedState))
+		{"page_fault", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
+			return page_fault.Start(ctx, col, s)
 		}},
-		{"swap", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s interface{}) (func() error, error) {
-			return swap.Start(ctx, col, s.(*ebpfshared.SharedState))
+		{"swap", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
+			return swap.Start(ctx, col, s)
 		}},
 	}
 

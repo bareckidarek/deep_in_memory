@@ -317,34 +317,4 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	return nil
 }
 
-// LoadSmapsForProcess loads memory ranges from /proc/PID/smaps for a process
-func (h *DBHelper) LoadSmapsForProcess(pid int) error {
-	threads, err := data.LoadSmapsRanges(pid)
-	if err != nil {
-		// Failed to load smaps - ignore (process may have exited)
-		return nil
-	}
 
-	record, err := h.getProcess(pid)
-	if err != nil {
-		return fmt.Errorf("failed to get process for smaps %d: %w", pid, err)
-	}
-
-	if record == nil {
-		// Process not found - ignore stale request
-		return nil
-	}
-
-	if len(threads) > 0 {
-		// Replace or merge threads - for simplicity, replace all ranges
-		record.Threads = threads
-	}
-
-	// Save ProcessData (just structure, no Value)
-	if err := h.db.Upsert(pidKey(pid), record); err != nil {
-		return fmt.Errorf("failed to upsert process: %w", err)
-	}
-
-	// AddressData will be populated when first page fault/swap occurs
-	return nil
-}

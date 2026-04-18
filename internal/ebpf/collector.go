@@ -1,17 +1,10 @@
 package ebpf
 
 import (
-	"context"
 	"sync"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/cilium/ebpf"
 )
-
-// Collector defines the interface for eBPF collectors
-type Collector interface {
-	Start(ctx context.Context, send func(tea.Msg)) (func() error, error)
-}
 
 // SharedState provides thread-safe access to shared eBPF resources.
 // Manages the target PID for filtering events across multiple collectors.
@@ -45,14 +38,6 @@ func (s *SharedState) SetTargetPID(pid int) error {
 	}
 
 	return nil
-}
-
-// GetTargetPID safely reads the current target PID value.
-// Uses read lock to allow concurrent access by multiple collectors.
-func (s *SharedState) GetTargetPID() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.targetPID
 }
 
 // GetEbpfMap returns the underlying eBPF map for collectors requiring direct access.

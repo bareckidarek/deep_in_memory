@@ -115,24 +115,25 @@ func (m *Model) renderSplitDetails() string {
 	return stack
 }
 
-// updateViewports calculates viewport dimensions and renders content for both the virtual
-// memory pane (top) and physical memory pane (bottom) based on the selected process data.
-// It handles layout constraints and pagination for memory range display.
-func (m *Model) updateViewports(pd *data.ProcessData) {
-	if pd == nil {
-		return
-	}
+// viewportDimensions holds the computed width/height for each viewport pane.
+type viewportDimensions struct {
+	virtualWidth    int
+	physicalWidth   int
+	logsWidth       int
+	virtualHeight   int
+	physicalHeight  int
+	barWidth        int
+}
 
+// calcViewportDimensions derives viewport sizes from the current layout metrics.
+func (m *Model) calcViewportDimensions() viewportDimensions {
 	available, rowHeight, secondRowHeight, barWidth := m.layoutMetrics()
-	proc := pd.Proc
-	summary := uirender.RenderSummary(proc, pd)
 
 	virtualWidth := available - constants.LeftPanePadding
 	if virtualWidth < constants.MinBarWidth {
 		virtualWidth = constants.MinBarWidth
 	}
 
-	// Split physical/logs width (second row is split horizontally)
 	halfWidth := available / 2
 	physicalWidth := halfWidth - constants.LeftPanePadding
 	logsWidth := available - halfWidth - constants.LeftPanePadding
@@ -152,18 +153,42 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	if physicalHeight < constants.MinViewportHeight {
 		physicalHeight = constants.MinViewportHeight
 	}
-	logsHeight := physicalHeight // Same height as physical
 
-	m.viewportVirtual.SetWidth(virtualWidth)
-	m.viewportVirtual.SetHeight(virtualHeight)
-	m.viewportPhysical.SetWidth(physicalWidth)
-	m.viewportPhysical.SetHeight(physicalHeight)
-	m.viewportLogs.SetWidth(logsWidth)
-	m.viewportLogs.SetHeight(logsHeight)
+	return viewportDimensions{
+		virtualWidth:   virtualWidth,
+		physicalWidth:  physicalWidth,
+		logsWidth:      logsWidth,
+		virtualHeight:  virtualHeight,
+		physicalHeight: physicalHeight,
+		barWidth:       barWidth,
+	}
+}
 
-	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, barWidth, m.rangesPage, virtualWidth))
-	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(m.buildPhysicalMemoryState(physicalWidth, physicalHeight)))
-	// Logs content is updated via FlushLogsMsg timer
+// applyViewportDimensions resizes all viewports and caches their rendered output.
+func (m *Model) applyViewportDimensions(d viewportDimensions) {
+	m.viewportVirtual.SetWidth(d.virtualWidth)
+	m.viewportVirtual.SetHeight(d.virtualHeight)
+	m.viewportPhysical.SetWidth(d.physicalWidth)
+	m.viewportPhysical.SetHeight(d.physicalHeight)
+	m.viewportLogs.SetWidth(d.logsWidth)
+	m.viewportLogs.SetHeight(d.physicalHeight) // logs use same height as physical
+}
+
+// updateViewports calculates viewport dimensions and renders content for both the virtual
+// memory pane (top) and physical memory pane (bottom) based on the selected process data.
+// It handles layout constraints and pagination for memory range display.
+func (m *Model) updateViewports(pd *data.ProcessData) {
+	if pd == nil {
+		return
+	}
+
+	d := m.calcViewportDimensions()
+	m.applyViewportDimensions(d)
+
+	summary := uirender.RenderSummary(pd.Proc, pd)
+	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, d.barWidth, m.rangesPage, d.virtualWidth))
+	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(m.buildPhysicalMemoryState(d.physicalWidth, d.physicalHeight)))
+	// Logs content is updated via GetLogsMsg timer
 
 	// Cache viewport content for performance
 	m.cachedVirtual = m.viewportVirtual.View()
@@ -173,45 +198,11 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 }
 
 func (m *Model) clearViewports() {
-	// Set dimensions same as updateViewports to maintain consistent layout
-	available, rowHeight, secondRowHeight, _ := m.layoutMetrics()
+	d := m.calcViewportDimensions()
+	m.applyViewportDimensions(d)
 
-	virtualWidth := available - constants.LeftPanePadding
-	if virtualWidth < constants.MinBarWidth {
-		virtualWidth = constants.MinBarWidth
-	}
-
-	halfWidth := available / 2
-	physicalWidth := halfWidth - constants.LeftPanePadding
-	logsWidth := available - halfWidth - constants.LeftPanePadding
-
-	if physicalWidth < constants.MinBarWidth {
-		physicalWidth = constants.MinBarWidth
-	}
-	if logsWidth < constants.MinBarWidth {
-		logsWidth = constants.MinBarWidth
-	}
-
-	virtualHeight := rowHeight - 2
-	if virtualHeight < constants.MinViewportHeight {
-		virtualHeight = constants.MinViewportHeight
-	}
-	physicalHeight := secondRowHeight - 2
-	if physicalHeight < constants.MinViewportHeight {
-		physicalHeight = constants.MinViewportHeight
-	}
-	logsHeight := physicalHeight
-
-	m.viewportVirtual.SetWidth(virtualWidth)
-	m.viewportVirtual.SetHeight(virtualHeight)
-	m.viewportPhysical.SetWidth(physicalWidth)
-	m.viewportPhysical.SetHeight(physicalHeight)
-	m.viewportLogs.SetWidth(logsWidth)
-	m.viewportLogs.SetHeight(logsHeight)
-
-	// Set content with styled titles
 	m.viewportVirtual.SetContent(uirender.RenderVirtualEmptyContent())
-	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(m.buildPhysicalMemoryState(physicalWidth, physicalHeight)))
+	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(m.buildPhysicalMemoryState(d.physicalWidth, d.physicalHeight)))
 	// Don't clear logs - they persist independently of selected process
 
 	// Cache viewport content for performance
@@ -221,9 +212,3 @@ func (m *Model) clearViewports() {
 	m.dirty = true
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

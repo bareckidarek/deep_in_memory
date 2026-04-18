@@ -74,7 +74,7 @@ func New(d data.Dataset) *Model {
 	ti.SetWidth(22)
 	ti.Prompt = "► "
 
-	// Stylizacja - pobierz domyślne style i zmodyfikuj
+	// Apply styles to focused and blurred states
 	styles := ti.Styles()
 	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#00afff")).Bold(true)
 	styles.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
