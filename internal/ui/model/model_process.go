@@ -5,10 +5,10 @@ import (
 	"io"
 
 	"charm.land/bubbles/v2/list"
-	"charm.land/lipgloss/v2"
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
+	uirender "deep_in_memory/internal/ui/render"
 )
 
 // listItem implements the list.Item interface for Bubble Tea lists.
@@ -23,8 +23,7 @@ func (i listItem) Description() string { return i.description }
 func (i listItem) FilterValue() string { return i.title }
 
 func renderListItem(proc data.Process, pid int) listItem {
-	desc := fmt.Sprintf("Start: %s UTC", proc.StartTime.UTC().Format("15:04:05"))
-	title := fmt.Sprintf("%s (%d)", proc.Name, proc.PID)
+	title, desc := uirender.FormatListItem(proc, pid)
 	return listItem{title: title, description: desc, pid: pid}
 }
 
@@ -52,27 +51,7 @@ func (d *processDelegate) Render(w io.Writer, m list.Model, index int, item list
 	isSelected := li.pid == d.model.selectedPID
 	isCursor := index == m.Index()
 
-	marker := "  "
-	titleStyle := lipgloss.NewStyle()
-	descStyle := lipgloss.NewStyle().Foreground(constants.DescriptionColor)
-
-	if isSelected {
-		marker = "► " // Selected with Enter
-		titleStyle = titleStyle.Foreground(constants.SelectedColor).Bold(true)
-	}
-
-	if isCursor {
-		if !isSelected {
-			marker = "• " // Just cursor focus
-			titleStyle = titleStyle.Foreground(constants.FocusColor)
-		}
-		titleStyle = titleStyle.Background(constants.BackgroundColor)
-		descStyle = descStyle.Background(constants.BackgroundColor)
-	}
-
-	title := titleStyle.Render(marker + li.Title())
-	desc := descStyle.Render("  " + li.Description())
-
+	title, desc := uirender.RenderProcessListItem(li.Title(), li.Description(), isCursor, isSelected)
 	fmt.Fprintf(w, "%s\n%s", title, desc)
 }
 

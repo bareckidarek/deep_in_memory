@@ -1,10 +1,6 @@
 package model
 
 import (
-	"fmt"
-	"strings"
-	"time"
-
 	"charm.land/lipgloss/v2"
 
 	"deep_in_memory/internal/constants"
@@ -129,7 +125,7 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 
 	available, rowHeight, secondRowHeight, barWidth := m.layoutMetrics()
 	proc := pd.Proc
-	summary := m.renderSummary(proc, pd)
+	summary := uirender.RenderSummary(proc, pd)
 
 	virtualWidth := available - constants.LeftPanePadding
 	if virtualWidth < constants.MinBarWidth {
@@ -214,7 +210,7 @@ func (m *Model) clearViewports() {
 	m.viewportLogs.SetHeight(logsHeight)
 
 	// Set content with styled titles
-	m.viewportVirtual.SetContent(uirender.StyleTitle("[virtual memory]") + "\n\nNo process selected.\nPress Enter on a process to view details.")
+	m.viewportVirtual.SetContent(uirender.RenderVirtualEmptyContent())
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(m.buildPhysicalMemoryState(physicalWidth, physicalHeight)))
 	// Don't clear logs - they persist independently of selected process
 
@@ -223,75 +219,6 @@ func (m *Model) clearViewports() {
 	m.cachedPhysical = m.viewportPhysical.View()
 	m.cachedLogs = m.viewportLogs.View()
 	m.dirty = true
-}
-
-// renderSummary creates a formatted summary header showing process information
-// and memory statistics including reservation, allocation, page-out, and page-in counts.
-// Returns a styled table with color-coded columns for different memory statuses.
-func (m *Model) renderSummary(proc data.Process, pd *data.ProcessData) string {
-	startUTC := proc.StartTime.UTC().Format(time.RFC3339)
-	stats := uirender.CalculateStatusStats(pd)
-
-	// Build header
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Process: %s (%d)\n", proc.Name, proc.PID))
-	sb.WriteString(fmt.Sprintf("Start (UTC): %s\n\n", startUTC))
-
-	// Define column widths
-	labelWidth := 8
-	col1Width := 36
-	col2Width := 30
-	col3Width := 24
-	col4Width := 24
-
-	// Create styles
-	borderStyle := lipgloss.NewStyle().Border(lipgloss.NormalBorder())
-	labelStyle := lipgloss.NewStyle().Width(labelWidth)
-	col1Style := lipgloss.NewStyle().Width(col1Width).Foreground(lipgloss.Color(constants.GrayColor))
-	col2Style := lipgloss.NewStyle().Width(col2Width).Foreground(lipgloss.Color(constants.GreenColor))
-	col3Style := lipgloss.NewStyle().Width(col3Width).Foreground(lipgloss.Color(constants.RedColor))
-	col4Style := lipgloss.NewStyle().Width(col4Width).Foreground(lipgloss.Color(constants.BlueColor))
-
-	// Build table rows
-	headerRow := lipgloss.JoinHorizontal(lipgloss.Top,
-		labelStyle.Render(""),
-		col1Style.Render(constants.StatusReservation),
-		col2Style.Render(constants.StatusAllocation),
-		col3Style.Render(constants.StatusPageOut),
-		col4Style.Render(constants.StatusPageIn),
-	)
-
-	pagesRow := lipgloss.JoinHorizontal(lipgloss.Top,
-		labelStyle.Render("pages"),
-		col1Style.Render(fmt.Sprintf("%d", stats.Reservation)),
-		col2Style.Render(fmt.Sprintf("%d", stats.Allocation)),
-		col3Style.Render(fmt.Sprintf("%d", stats.PageOut)),
-		col4Style.Render(fmt.Sprintf("%d", stats.PageIn)),
-	)
-
-	reservationBytes := stats.Reservation * data.PageSizeBytes
-	allocationBytes := stats.Allocation * data.PageSizeBytes
-	pageOutBytes := stats.PageOut * data.PageSizeBytes
-	pageInBytes := stats.PageIn * data.PageSizeBytes
-
-	sizeRow := lipgloss.JoinHorizontal(lipgloss.Top,
-		labelStyle.Render("size"),
-		col1Style.Render(uirender.HumanBytes(int64(reservationBytes))),
-		col2Style.Render(uirender.HumanBytes(int64(allocationBytes))),
-		col3Style.Render(uirender.HumanBytes(int64(pageOutBytes))),
-		col4Style.Render(uirender.HumanBytes(int64(pageInBytes))),
-	)
-
-	// Join all rows vertically
-	table := lipgloss.JoinVertical(lipgloss.Left, headerRow, pagesRow, sizeRow)
-
-	// Apply border to the entire table
-	borderedTable := borderStyle.Render(table)
-
-	sb.WriteString(borderedTable)
-	sb.WriteString("\n")
-
-	return sb.String()
 }
 
 func max(a, b int) int {
