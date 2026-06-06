@@ -27,13 +27,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	f, err := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer f.Close()
-
-	log.SetOutput(f)
+	configLogger()
 
 	clearDatabases()
 
@@ -162,4 +156,15 @@ func clearDatabases() {
 	// This ensures we start with a clean state each time
 	os.Remove("./deep_in_memory.db")
 	os.Remove("./deep_in_memory_addresses.db")
+}
+
+func configLogger() {
+	// Configure logger to write to a file with timestamps
+	logFile, err := os.OpenFile("deep_in_memory.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		fmt.Printf("Failed to open log file: %v\n", err)
+		return
+	}
+
+	log.SetOutput(logFile)
 }

@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -250,8 +249,6 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessInitSwapUnswap) error {
 	case 2:
 		status = "UNSWAP"
 	}
-
-	log.Println("Updated page status for PID", ev.PID, "TID", ev.TID, "Address", fmt.Sprintf("0x%X", ev.Address), "Status", status)
 
 	err := h.updatePageStatus(ev.PID, ev.TID, ev.Address, status)
 	if err != nil {
