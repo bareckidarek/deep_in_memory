@@ -22,7 +22,7 @@ type dbOp struct {
 //   - Zombie processes (async writes after ProcessExit re-create deleted processes)
 //
 // Key design:
-//   - FIFO channel preserves event ordering (mmap before page_fault for same address)
+//   - FIFO channel preserves event ordering (mmap before do_anonymous_page for same address)
 //   - exitedPIDs prevents enqueuing events for dead processes
 //   - EnqueueExit marks PID as dead BEFORE queueing the delete, so no future events sneak in
 //   - Update() goroutine NEVER writes to BoltDB directly
@@ -79,6 +79,7 @@ func (w *AsyncDBWriter) Enqueue(pid int, handler func(*DBHelper) error) bool {
 		return true
 	default:
 		// Channel full — drop event to avoid blocking the UI goroutine.
+		println("AsyncDBWriter: channel full during Enqueue, dropping event")
 		w.reportError(fmt.Errorf("async DB queue full (pid=%d), dropping event", pid))
 		return false
 	}

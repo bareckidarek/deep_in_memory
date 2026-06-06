@@ -17,11 +17,11 @@ const (
 	ListWidthFallback = DefaultListWidth + 2
 
 	// Minimum dimensions
-	MinAvailableWidth  = 20
-	MinBarWidth        = 10
-	MinContentHeight   = 6
-	MinViewportHeight  = 3
-	BarWidthBuffer     = 50
+	MinAvailableWidth = 20
+	MinBarWidth       = 10
+	MinContentHeight  = 6
+	MinViewportHeight = 3
+	BarWidthBuffer    = 50
 
 	// Layout percentages
 	VirtualMemoryPercent  = 55

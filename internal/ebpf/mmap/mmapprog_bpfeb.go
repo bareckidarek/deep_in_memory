@@ -8,11 +8,13 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
 
 type MmapProgMmapEvent struct {
+	_    structs.HostLayout
 	Ts   uint64
 	Type uint32
 	Pid  uint32
@@ -59,9 +61,10 @@ func LoadMmapProgObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
 type MmapProgSpecs struct {
 	MmapProgProgramSpecs
 	MmapProgMapSpecs
+	MmapProgVariableSpecs
 }
 
-// MmapProgSpecs contains programs before they are loaded into the kernel.
+// MmapProgProgramSpecs contains programs before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type MmapProgProgramSpecs struct {
@@ -81,12 +84,20 @@ type MmapProgMapSpecs struct {
 	TargetPid     *ebpf.MapSpec `ebpf:"target_pid"`
 }
 
+// MmapProgVariableSpecs contains global variables before they are loaded into the kernel.
+//
+// It can be passed ebpf.CollectionSpec.Assign.
+type MmapProgVariableSpecs struct {
+	UnusedEvent *ebpf.VariableSpec `ebpf:"unused_event"`
+}
+
 // MmapProgObjects contains all objects after they have been loaded into the kernel.
 //
 // It can be passed to LoadMmapProgObjects or ebpf.CollectionSpec.LoadAndAssign.
 type MmapProgObjects struct {
 	MmapProgPrograms
 	MmapProgMaps
+	MmapProgVariables
 }
 
 func (o *MmapProgObjects) Close() error {
@@ -113,6 +124,13 @@ func (m *MmapProgMaps) Close() error {
 		m.MunmapEntries,
 		m.TargetPid,
 	)
+}
+
+// MmapProgVariables contains all global variables after they have been loaded into the kernel.
+//
+// It can be passed to LoadMmapProgObjects or ebpf.CollectionSpec.LoadAndAssign.
+type MmapProgVariables struct {
+	UnusedEvent *ebpf.Variable `ebpf:"unused_event"`
 }
 
 // MmapProgPrograms contains all programs after they have been loaded into the kernel.

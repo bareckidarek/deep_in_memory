@@ -18,11 +18,11 @@ type SuggestionItem struct {
 
 // PhysicalMemoryState holds all data needed to render the physical memory section.
 type PhysicalMemoryState struct {
-	InputView          string            // Rendered text input
-	Focused            bool              // Whether the input is focused
-	Suggestions        []SuggestionItem  // Address suggestions with status
-	SelectedSuggestion int               // Currently highlighted suggestion (-1 = none)
-	ShowSuggestions    bool              // Whether to show suggestions
+	InputView          string              // Rendered text input
+	Focused            bool                // Whether the input is focused
+	Suggestions        []SuggestionItem    // Address suggestions with status
+	SelectedSuggestion int                 // Currently highlighted suggestion (-1 = none)
+	ShowSuggestions    bool                // Whether to show suggestions
 	PagemapResult      []string            // Pagemap lookup result lines
 	PagemapPFN         uint64              // PFN from last lookup
 	HasPFN             bool                // Whether PFN is valid

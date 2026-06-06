@@ -1,12 +1,12 @@
 package render
 
 import (
-"fmt"
+	"fmt"
 
-"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2"
 
-"deep_in_memory/internal/constants"
-"deep_in_memory/internal/data"
+	"deep_in_memory/internal/constants"
+	"deep_in_memory/internal/data"
 )
 
 // StatusStats holds page counts for each status category.

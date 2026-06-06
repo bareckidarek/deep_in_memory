@@ -17,9 +17,8 @@ import (
 	ebpfshared "deep_in_memory/internal/ebpf"
 	"deep_in_memory/internal/ebpf/brk"
 	"deep_in_memory/internal/ebpf/mmap"
-	"deep_in_memory/internal/ebpf/page_fault"
+	"deep_in_memory/internal/ebpf/paging"
 	"deep_in_memory/internal/ebpf/sched"
-	"deep_in_memory/internal/ebpf/swap"
 	storedb "deep_in_memory/internal/thirdparty/db"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
@@ -27,6 +26,14 @@ import (
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	f, err := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	log.SetOutput(f)
 
 	clearDatabases()
 
@@ -130,11 +137,8 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 		{"brk", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
 			return brk.Start(ctx, col, s)
 		}},
-		{"page_fault", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
-			return page_fault.Start(ctx, col, s)
-		}},
-		{"swap", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
-			return swap.Start(ctx, col, s)
+		{"paging", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
+			return paging.Start(ctx, col, s)
 		}},
 	}
 

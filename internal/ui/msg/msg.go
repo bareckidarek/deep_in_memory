@@ -52,36 +52,24 @@ type ProcessBrk struct {
 	Comm      string
 }
 
-// ProcessPageFault represents a page_fault_user tracepoint event.
-type ProcessPageFault struct {
+// ProcessInitSwapUnswap represents paging-related events (do_anonymous_page, do_swap_page, and swap_writepage).
+type ProcessInitSwapUnswap struct {
 	Timestamp time.Time
 	PID       int
 	TID       int
 	Address   uint64
-	IP        uint64
-	ErrorCode uint64
-	Comm      string
-}
-
-// ProcessSwapUnswap represents swap-related events (do_swap_page and swap_writepage).
-type ProcessSwapUnswap struct {
-	Timestamp time.Time
-	PID       int
-	TID       int
-	Address   uint64
-	IsSwap    bool // true=SWAP (swap_writepage), false=UNSWAP (do_swap_page)
+	Type      int // 0=INIT (do_anonymous_page), 1=SWAP (swap_writepage), 2=UNSWAP (do_swap_page)
 	Comm      string
 	ErrorCode uint64
 }
 
 // GetTimestamp implementations for TimestampedEvent interface
-func (e ProcessExec) GetTimestamp() time.Time       { return e.Timestamp }
-func (e ProcessExit) GetTimestamp() time.Time       { return e.Timestamp }
-func (e ProcessMmap) GetTimestamp() time.Time       { return e.Timestamp }
-func (e ProcessMunmap) GetTimestamp() time.Time     { return e.Timestamp }
-func (e ProcessBrk) GetTimestamp() time.Time        { return e.Timestamp }
-func (e ProcessPageFault) GetTimestamp() time.Time  { return e.Timestamp }
-func (e ProcessSwapUnswap) GetTimestamp() time.Time { return e.Timestamp }
+func (e ProcessExec) GetTimestamp() time.Time           { return e.Timestamp }
+func (e ProcessExit) GetTimestamp() time.Time           { return e.Timestamp }
+func (e ProcessMmap) GetTimestamp() time.Time           { return e.Timestamp }
+func (e ProcessMunmap) GetTimestamp() time.Time         { return e.Timestamp }
+func (e ProcessBrk) GetTimestamp() time.Time            { return e.Timestamp }
+func (e ProcessInitSwapUnswap) GetTimestamp() time.Time { return e.Timestamp }
 
 // LoadSmapsRequest is sent when user selects a process to load its memory maps from /proc/PID/smaps.
 type LoadSmapsRequest struct {

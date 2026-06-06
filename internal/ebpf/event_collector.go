@@ -13,7 +13,7 @@ import (
 
 // CentralEventCollector collects events from all eBPF collectors and batches them
 // while maintaining chronological order across different event types.
-// This is critical because events from different collectors (page_fault, swap, mmap, brk)
+// This is critical because events from different collectors (paging, mmap, brk)
 // can be interleaved in time and must be processed in timestamp order.
 type CentralEventCollector struct {
 	mu            sync.Mutex

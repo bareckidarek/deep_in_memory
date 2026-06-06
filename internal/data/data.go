@@ -314,39 +314,39 @@ func (r *AddrRange) removePageFromStatus(status string) {
 func SortRanges(ranges []AddrRange) {
 	sort.SliceStable(ranges, func(i, j int) bool {
 		// Helper to check if label contains file/lib reference
-		isFileRef := func(label string) bool {
-			return strings.HasPrefix(label, "/") || strings.Contains(label, ".so")
-		}
+		// isFileRef := func(label string) bool {
+		// 	return strings.HasPrefix(label, "/") || strings.Contains(label, ".so")
+		// }
 
-		// Rule 1: [heap] always first
-		if ranges[i].Label == "[heap]" {
-			return true
-		}
-		if ranges[j].Label == "[heap]" {
-			return false
-		}
+		// // Rule 1: [heap] always first
+		// if ranges[i].Label == "[heap]" {
+		// 	return true
+		// }
+		// if ranges[j].Label == "[heap]" {
+		// 	return false
+		// }
 
-		// Categorize ranges
-		// Category 0: empty label
-		// Category 1: non-empty label, no file/lib
-		// Category 2: file/lib reference
-		getCategory := func(r AddrRange) int {
-			if r.Label == "" {
-				return 0
-			}
-			if isFileRef(r.Label) {
-				return 2
-			}
-			return 1
-		}
+		// // Categorize ranges
+		// // Category 0: empty label
+		// // Category 1: non-empty label, no file/lib
+		// // Category 2: file/lib reference
+		// getCategory := func(r AddrRange) int {
+		// 	if r.Label == "" {
+		// 		return 0
+		// 	}
+		// 	if isFileRef(r.Label) {
+		// 		return 2
+		// 	}
+		// 	return 1
+		// }
 
-		catI := getCategory(ranges[i])
-		catJ := getCategory(ranges[j])
+		// catI := getCategory(ranges[i])
+		// catJ := getCategory(ranges[j])
 
-		// Sort by category first
-		if catI != catJ {
-			return catI < catJ
-		}
+		// // Sort by category first
+		// if catI != catJ {
+		// 	return catI < catJ
+		// }
 
 		// Within same category, sort by StartVal
 		return ranges[i].StartVal < ranges[j].StartVal

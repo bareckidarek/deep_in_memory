@@ -117,12 +117,12 @@ func (m *Model) renderSplitDetails() string {
 
 // viewportDimensions holds the computed width/height for each viewport pane.
 type viewportDimensions struct {
-	virtualWidth    int
-	physicalWidth   int
-	logsWidth       int
-	virtualHeight   int
-	physicalHeight  int
-	barWidth        int
+	virtualWidth   int
+	physicalWidth  int
+	logsWidth      int
+	virtualHeight  int
+	physicalHeight int
+	barWidth       int
 }
 
 // calcViewportDimensions derives viewport sizes from the current layout metrics.
@@ -211,4 +211,3 @@ func (m *Model) clearViewports() {
 	m.cachedLogs = m.viewportLogs.View()
 	m.dirty = true
 }
-

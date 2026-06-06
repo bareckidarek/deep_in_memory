@@ -156,13 +156,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case uimsg.ProcessBrk:
 		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleBrkEvent(v) }, "brk", v.Ret, v.TID)
 
-	case uimsg.ProcessPageFault:
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandlePageFaultEvent(v) }, "page_fault", v.Address, v.TID)
-
-	case uimsg.ProcessSwapUnswap:
-		logType := "swap_read"
-		if v.IsSwap {
+	case uimsg.ProcessInitSwapUnswap:
+		logType := ""
+		switch v.Type {
+		case 0:
+			logType = "init"
+		case 1:
 			logType = "swap_write"
+		case 2:
+			logType = "swap_read"
 		}
 		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleSwapEvent(v) }, logType, v.Address, v.TID)
 

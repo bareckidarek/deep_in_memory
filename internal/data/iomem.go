@@ -94,5 +94,3 @@ func parseIomemLine(line string) (IomemRange, bool) {
 		Level: level,
 	}, true
 }
-
-

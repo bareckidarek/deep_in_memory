@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -233,26 +234,24 @@ func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
 	return nil
 }
 
-// HandlePageFaultEvent handles page fault events for a process
-func (h *DBHelper) HandlePageFaultEvent(ev uimsg.ProcessPageFault) error {
-	// Filter page faults by error code (only handle user write faults)
-	if ev.ErrorCode != constants.PageFaultErrorCode {
-		return nil
-	}
-	return h.updatePageStatus(ev.PID, ev.TID, ev.Address, "INIT")
-}
-
 // HandleSwapEvent handles swap events for a process
-func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessSwapUnswap) error {
+func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessInitSwapUnswap) error {
 	// Filter swap events by error code
 	if ev.ErrorCode != constants.SwapEventSuccessCode {
 		return nil
 	}
 
-	status := "UNSWAP"
-	if ev.IsSwap {
+	status := ""
+	switch ev.Type {
+	case 0:
+		status = "INIT"
+	case 1:
 		status = "SWAP"
+	case 2:
+		status = "UNSWAP"
 	}
+
+	log.Println("Updated page status for PID", ev.PID, "TID", ev.TID, "Address", fmt.Sprintf("0x%X", ev.Address), "Status", status)
 
 	err := h.updatePageStatus(ev.PID, ev.TID, ev.Address, status)
 	if err != nil {
@@ -293,6 +292,7 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	if err != nil {
 		return fmt.Errorf("failed to get address data: %w", err)
 	}
+
 	addrData.AddPageOffset(tid, r.StartVal, pageOffset, status)
 
 	if err := h.addressDB.Upsert(pidKey(pid), addrData); err != nil {
@@ -316,5 +316,3 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	}
 	return nil
 }
-
-
