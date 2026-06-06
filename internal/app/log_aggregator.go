@@ -41,7 +41,7 @@ func NewLogAggregator() *LogAggregator {
 			"brk":        make(map[uint64]*eventInfo),
 			"mmap":       make(map[uint64]*eventInfo),
 			"munmap":     make(map[uint64]*eventInfo),
-			"page_fault": make(map[uint64]*eventInfo),
+			"init":       make(map[uint64]*eventInfo),
 			"swap_write": make(map[uint64]*eventInfo),
 			"swap_read":  make(map[uint64]*eventInfo),
 		},
@@ -113,7 +113,7 @@ func formatEventType(eventType string) string {
 		return "virtual memory mapping [mmap]"
 	case "munmap":
 		return "virtual memory unmapping [munmap]"
-	case "page_fault":
+	case "init":
 		return "lazy physical allocation"
 	case "swap_write":
 		return "page_out"
@@ -139,7 +139,7 @@ func (la *LogAggregator) GetFormattedLogs() []string {
 		timestamp := entry.Timestamp.Format("2006-01-02 15:04:05")
 		addrStr := formatAddressRanges(entry.Addresses)
 		displayType := formatEventType(entry.EventType)
-		lines[i] = fmt.Sprintf("%s | PID:%d, TID:%d | %s -> count: %d, addresses: %s",
+		lines[i] = fmt.Sprintf("%s | PID:%d, TID:%d | %s -> pages: %d, addresses: %s",
 			timestamp, entry.PID, entry.TID, displayType, entry.Count, addrStr)
 	}
 	return lines

@@ -1,6 +1,6 @@
 //go:build ebpf
 
-package swap
+package paging
 
 import (
 	"context"
@@ -16,12 +16,12 @@ import (
 	uimsg "deep_in_memory/internal/ui/msg"
 )
 
-// Start attaches swap kprobes and streams events to the central event collector.
+// Start attaches paging kprobes and streams events to the central event collector.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // Requires the SharedState from the sched module to filter events.
 func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sharedState *ebpfshared.SharedState) (func() error, error) {
-	var objs SwapProgObjects
-	spec, err := LoadSwapProg()
+	var objs PagingProgObjects
+	spec, err := LoadPagingProg()
 	if err != nil {
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
@@ -40,6 +40,19 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 
 	if err := spec.LoadAndAssign(&objs, opts); err != nil {
 		return nil, fmt.Errorf("load and assign BPF objects: %w", err)
+	}
+
+	doAnonymousPageKprobe, err := link.Kprobe("do_anonymous_page", objs.KprobeDoAnonymousPage, nil)
+	if err != nil {
+		objs.Close()
+		return nil, fmt.Errorf("attach kprobe do_anonymous_page: %w", err)
+	}
+
+	doAnonymousPageKretprobe, err := link.Kretprobe("do_anonymous_page", objs.KretprobeDoAnonymousPage, nil)
+	if err != nil {
+		doAnonymousPageKprobe.Close()
+		objs.Close()
+		return nil, fmt.Errorf("attach kretprobe do_anonymous_page: %w", err)
 	}
 
 	doSwapPageKprobe, err := link.Kprobe("do_swap_page", objs.KprobeDoSwapPage, nil)
@@ -68,6 +81,8 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 		swapWritepageKprobe.Close()
 		doSwapPageKretprobe.Close()
 		doSwapPageKprobe.Close()
+		doAnonymousPageKretprobe.Close()
+		doAnonymousPageKprobe.Close()
 		objs.Close()
 		return nil, fmt.Errorf("attach kretprobe swap_writepage: %w", err)
 	}
@@ -78,33 +93,44 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 		swapWritepageKprobe.Close()
 		doSwapPageKretprobe.Close()
 		doSwapPageKprobe.Close()
+		doAnonymousPageKretprobe.Close()
+		doAnonymousPageKprobe.Close()
 		objs.Close()
 		return nil, fmt.Errorf("create ringbuf reader: %w", err)
 	}
 
 	// Use batched event processing for high-frequency swap events
-	processor := func(e SwapProgSwapEvent) tea.Msg {
+	processor := func(e PagingProgPagingEvent) tea.Msg {
 		ts := time.Unix(0, int64(e.Ts))
 
 		switch e.Type {
-		case 1: // do_swap_page
-			return uimsg.ProcessSwapUnswap{
+		case 0: // do_swap_page
+			return uimsg.ProcessInitSwapUnswap{
 				Timestamp: ts,
 				PID:       int(e.Pid),
 				TID:       int(e.Tid),
 				Address:   e.Addr,
-				IsSwap:    false, // UNSWAP
+				Type:      0, // INIT
 				ErrorCode: e.Ret,
 			}
-		case 2: // swap_writepage
+		case 1: // swap_writepage
 			// Need to add three zeros at the end (shift left by 12 bits = multiply by 4096)
 			addr := e.Addr << 12
-			return uimsg.ProcessSwapUnswap{
+			return uimsg.ProcessInitSwapUnswap{
 				Timestamp: ts,
 				PID:       int(e.Pid),
 				TID:       int(e.Tid),
 				Address:   addr,
-				IsSwap:    true, // SWAP
+				Type:      1, // SWAP
+				ErrorCode: e.Ret,
+			}
+		case 2: // do_swap_page
+			return uimsg.ProcessInitSwapUnswap{
+				Timestamp: ts,
+				PID:       int(e.Pid),
+				TID:       int(e.Tid),
+				Address:   e.Addr,
+				Type:      2, // UNSWAP
 				ErrorCode: e.Ret,
 			}
 		default:
@@ -125,6 +151,8 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 		swapWritepageKprobe.Close()
 		doSwapPageKretprobe.Close()
 		doSwapPageKprobe.Close()
+		doAnonymousPageKretprobe.Close()
+		doAnonymousPageKprobe.Close()
 		return objs.Close()
 	}
 

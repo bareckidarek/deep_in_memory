@@ -1,6 +1,6 @@
 //go:build !ebpf
 
-package swap
+package paging
 
 import (
 	"context"
@@ -11,5 +11,5 @@ import (
 
 // Start is a stub for non-eBPF builds.
 func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sharedState interface{}) (func() error, error) {
-	return nil, fmt.Errorf("swap collector not available (build without -tags ebpf)")
+	return nil, fmt.Errorf("paging collector not available (build without -tags ebpf)")
 }
