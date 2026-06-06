@@ -79,7 +79,6 @@ func (w *AsyncDBWriter) Enqueue(pid int, handler func(*DBHelper) error) bool {
 		return true
 	default:
 		// Channel full — drop event to avoid blocking the UI goroutine.
-		println("AsyncDBWriter: channel full during Enqueue, dropping event")
 		w.reportError(fmt.Errorf("async DB queue full (pid=%d), dropping event", pid))
 		return false
 	}
