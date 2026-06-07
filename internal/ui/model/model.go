@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"charm.land/bubbles/v2/list"
@@ -67,6 +68,9 @@ type Model struct {
 
 // New constructs a Model from dataset.
 func New(d data.Dataset) *Model {
+	
+	os.Setenv("COLORTERM", "truecolor")
+	
 	ti := textinput.New()
 	ti.Placeholder = "enter hex address..."
 	ti.SetValue("0x")
