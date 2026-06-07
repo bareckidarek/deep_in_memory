@@ -1,9 +1,11 @@
-package data
+package proc
 
 import (
 	"encoding/binary"
 	"fmt"
 	"os"
+
+	"deep_in_memory/internal/data"
 )
 
 // PagemapEntry represents parsed information from /proc/PID/pagemap for a single page.
@@ -21,7 +23,7 @@ type PagemapEntry struct {
 
 // ReadPagemap reads the pagemap entry for a given virtual address in a process.
 func ReadPagemap(pid int, vaddr uint64) (*PagemapEntry, error) {
-	pageSize := PageSizeBytes
+	pageSize := data.PageSizeBytes
 	entrySize := uint64(8)
 	pageIndex := vaddr / pageSize
 
@@ -81,7 +83,7 @@ func FormatPagemapEntry(e *PagemapEntry) []string {
 
 	if e.Present {
 		lines = append(lines, fmt.Sprintf("pfn:        0x%x (%d)", e.PFN, e.PFN))
-		physAddr := e.PFN * PageSizeBytes
+		physAddr := e.PFN * data.PageSizeBytes
 		lines = append(lines, fmt.Sprintf("phys_addr:  0x%x", physAddr))
 		lines = append(lines, "            (looking in iomem)")
 	} else {
@@ -103,12 +105,12 @@ func GeneratePageAlignedAddresses(startVal, endVal uint64, prefix string, maxCou
 	var result []string
 
 	// Align start to page boundary
-	alignedStart := (startVal / PageSizeBytes) * PageSizeBytes
+	alignedStart := (startVal / data.PageSizeBytes) * data.PageSizeBytes
 	if alignedStart < startVal {
-		alignedStart += PageSizeBytes
+		alignedStart += data.PageSizeBytes
 	}
 
-	for addr := alignedStart; addr < endVal && len(result) < maxCount; addr += PageSizeBytes {
+	for addr := alignedStart; addr < endVal && len(result) < maxCount; addr += data.PageSizeBytes {
 		addrStr := fmt.Sprintf("0x%x", addr)
 		if prefix == "" || len(prefix) <= 2 || hasHexPrefix(addrStr, prefix) {
 			result = append(result, addrStr)

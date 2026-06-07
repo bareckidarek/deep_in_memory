@@ -1,183 +1,177 @@
 # deep_in_memory
 
-A terminal UI for exploring Linux process memory activity with live eBPF tracing.
+`deep_in_memory` is a Linux TUI for observing how a selected process uses virtual and physical memory.
+It combines eBPF tracing, `/proc` inspection, and a local BoltDB-backed state store to show:
 
-## Overview
+- process lifecycle events (`exec`, `exit`)
+- virtual memory changes (`mmap`, `munmap`, `brk`)
+- page activity (`INIT`, `SWAP`, `UNSWAP`)
+- pagemap lookups for a chosen virtual address
+- `/proc/iomem` ranges correlated with resolved physical frames
+- aggregated event logs for the currently selected PID
 
-`deep_in_memory` provides real-time visibility into process memory behavior using eBPF tracepoints. It tracks virtual memory allocations, page faults, swap events, and heap usage, presenting an interactive terminal interface with visual memory range bars and detailed per-process statistics.
+The interface is implemented with Bubble Tea and is intended to run on Linux with eBPF support enabled.
 
-## Features
+![Layout](playground/layout.png)
 
-### Process Tracking
-- **Process lifecycle**: Captures `sched_process_exec` (when processes execute new programs) and `sched_process_exit` events
-- **Process list**: Displays active processes with name, PID, and start time (UTC)
-- **Target selection**: Press Enter on a process to enable detailed tracing for that specific PID
+## What The Application Does
 
-### Memory Event Tracing
-- **Virtual memory allocation**: Tracks `mmap` and `munmap` syscalls showing address ranges and sizes
-- **Heap management**: Monitors `brk` syscall for heap expansion/contraction  
-- **Page faults**: Captures user-space page faults (`exceptions/page_fault_user`) with fault addresses
-- **Swap activity**: Tracks page swap-out (`swap_writepage`) and swap-in (`do_swap_page`) events
+At startup the application:
 
-### Visual Memory Display
-- **Virtual memory ranges**: Color-coded bars showing allocated ranges per thread
-  - Gray: unmapped/free regions
-  - Green: initialized pages (INIT - page faulted)
-  - Orange: swapped pages (SWAP)
-  - Blue: recovered from swap (UNSWAP)
-- **Range information**: Each bar displays `start-end (100%=Xp [size])` where:
-  - `size`: total range size in human-readable units (kB, MB, GB)
-  - `[Xp]`: number of pages in range
-- **Per-thread breakdown**: Shows separate memory ranges for each thread (TID)
-- **Special labels**: Identifies ranges like `[heap]`, `[stack]`, and other named regions from `/proc/PID/smaps`
+1. opens two BoltDB databases for process metadata and address/page metadata
+2. starts the Bubble Tea TUI
+3. starts a `sched` eBPF collector and, if available, secondary collectors for `mmap`, `brk`, and paging events
+4. batches and sorts traced events chronologically before applying them
+5. periodically reloads the dataset from BoltDB and refreshes the UI
 
-### Summary Statistics
-- **Virtual pages**: Total count of allocated pages across all ranges
-- **Virtual usage**: Total memory allocated (automatically formatted: kB, MB, GB, TB, etc.)
-- **Page size**: Automatically detected from system configuration via `getpagesize()`
-- **Status counters**: Per-range counts of INIT, SWAP, and UNSWAP pages
+The main workflow is:
 
-## User Interface
+- choose a process from the left pane
+- press `Enter` to make it the traced target PID
+- inspect virtual ranges, page status counts, logs, and physical mapping details in the right pane
 
-### Layout
-```
-┌─────────────────────────┬────────────────────────────────────────┐
-│  Process List           │  Virtual Memory Details                │
-│  (name, PID, start)     │  - Process summary                     │
-│  ► selected             │  - Per-thread memory ranges (bars)     │
-│  • cursor focus         │  - Page/range visualization            │
-│                         │  - Pagination for large range lists    │
-├─────────────────────────┼────────────────────────────────────────┤
-│                         │  Physical Memory (PFNs)                │
-│                         │  - Physical frame numbers              │
-│                         │  - (coming soon: full PFN tracking)    │
-└─────────────────────────┴────────────────────────────────────────┘
-```
+## Main Features
 
-### Navigation
-- **Arrow keys**: Move cursor up/down in process list
-- **Enter**: Select process and enable detailed tracing (sets target PID in eBPF map)
-- **Mouse wheel**: Scroll through memory details panes
-- **Page Up/Down**: Navigate through pages of memory ranges (30 ranges per page)
-- **q / Ctrl+C**: Quit application
+- Live process list with per-process detail panes
+- Virtual memory view populated from `smaps` and updated by eBPF events
+- Physical memory pane with pagemap lookup and `/proc/iomem` correlation
+- Aggregated logs grouped by event type and address ranges
+- Event ordering preserved across multiple eBPF collectors
+- Async database writes to avoid blocking the TUI event loop
+- Graceful degradation when eBPF collectors cannot be attached
 
-### Display Features
-- **Auto-refresh**: UI updates every second from database while preserving cursor position
-- **Selection markers**: 
-  - `►` indicates selected process (detailed tracing active)
-  - `•` shows cursor position
-- **Color coding**: 
-  - Green + bold for selected process
-  - Blue for cursor focus
-  - Status-based colors in memory bars
-- **Responsive layout**: Automatically adjusts to terminal size
+## Requirements
 
-## Build & Run
+Runtime requirements:
 
-### Prerequisites
-- Go 1.21 or later
-- Clang/LLVM toolchain
-- Linux kernel headers (for your running kernel)
-- Linux system with eBPF support
+- Linux
+- access to eBPF tracepoints supported by the running kernel
+- permission to read `/proc/<pid>/smaps` and `/proc/<pid>/pagemap`
+- root or sufficient capabilities for eBPF attachment; `/proc/iomem` is only useful with real addresses when run with root or `CAP_SYS_RAWIO`
 
-### Generate eBPF Assets
-```sh
-# Generate all eBPF collectors
-go generate ./internal/ebpf/sched
-go generate ./internal/ebpf/mmap
-go generate ./internal/ebpf/brk
-go generate ./internal/ebpf/page_fault
-go generate ./internal/ebpf/swap
+Build requirements:
+
+- Go `1.26.4`
+- `bpftool`
+- `clang`
+- `llvm`
+- `libbpf-dev`
+- kernel BTF available at `/sys/kernel/btf/vmlinux`
+
+## Build
+
+Prepare the generated eBPF headers and Go bindings:
+
+```bash
+make prepare
+make generate
 ```
 
-### Build
-```sh
-# Full build with eBPF support
-go build -tags ebpf -o deep_in_memory ./cmd/gui
+Build the binary with eBPF support:
 
-# Stub build (no eBPF, for testing UI only)
-go build -o deep_in_memory ./cmd/gui
+```bash
+make build
 ```
 
-### Run
-```sh
-# Run with eBPF (requires root for eBPF operations)
+This produces the executable:
+
+```bash
+./deep_in_memory
+```
+
+If you build without the `ebpf` tag, the application can still start, but the eBPF collectors fall back to stubs and tracing is unavailable.
+
+## Run
+
+Typical local run:
+
+```bash
 sudo ./deep_in_memory
 ```
 
-## Architecture
+You can also build the container image:
 
-### eBPF Collectors
-Each collector attaches to specific kernel tracepoints and streams events via ringbuffers:
-
-- **sched**: Process lifecycle (`sched_process_exec`, `sched_process_exit`)
-- **mmap**: Memory mapping (`sys_enter/exit_mmap`, `sys_enter/exit_munmap`) - filtered by target PID
-- **brk**: Heap management (`sys_enter/exit_brk`) - filtered by target PID  
-- **page_fault**: User page faults (`exceptions/page_fault_user`) - filtered by target PID
-- **swap**: Swap events (`swap_writepage`, `do_swap_page` kprobes) - filtered by target PID
-
-### Target PID Filtering
-- Sched collector maintains a shared `target_pid` eBPF map (single-element array)
-- When user selects a process (Enter key), the PID is written to this map
-- Other collectors (mmap, brk, page_fault, swap) read from this map to filter events
-- This minimizes performance overhead by only tracking details for the selected process
-
-### Data Flow
-```
-eBPF Tracepoints → Ringbuffers → Go Collectors → Tea Messages → 
-   App Model → BoltDB → Dataset → UI Model → Terminal Rendering
+```bash
+docker build -t deep_in_memory .
 ```
 
-### Data Persistence
-- **BoltDB** database (`deep_in_memory.db`) in current directory
-- **Cleared on startup** to ensure clean state each run
-- One document per process, keyed by PID (string)
-- Process records include:
-  - Process metadata (PID, name, start time)
-  - Per-thread virtual address ranges with status counters
-  - Virtual page lifecycle tracking (future: full PFN mapping)
+Notes:
 
-### Page Size Handling
-- Dynamically retrieved from OS using `syscall.Getpagesize()`
-- Supports systems with non-4KB pages (e.g., ARM64 with 16KB/64KB pages)
-- Used for all size calculations and conversions
+- on every startup the application removes `./deep_in_memory.db` and `./deep_in_memory_addresses.db`, so runtime state is intentionally ephemeral
+- logs are written to `./deep_in_memory.log`
+- if a collector fails to attach, the UI shows a warning and continues running with reduced functionality
 
-## Technical Details
+## TUI Controls
 
-### Memory Range Tracking
-- Ranges created on `mmap` success with size calculated in pages
-- Heap ranges marked with `[heap]` label, tracked via `brk` syscalls
-- Page fault events increment INIT counter for containing range
-- Swap events adjust SWAP/UNSWAP/INIT counters:
-  - `swap_writepage`: SWAP++, INIT--
-  - `do_swap_page`: UNSWAP++, SWAP--, (conditionally INIT--)
-- `munmap` removes overlapping ranges
+- `Up` / `Down`: move through the process list
+- `Enter`: select the highlighted process and set it as the traced target PID
+- `n`: next page of virtual ranges
+- `p`: previous page of virtual ranges
+- `Tab`: focus the physical-memory virtual address input
+- `Enter` in the physical-memory input: run pagemap lookup for the current address
+- `Up` / `Down` in the physical-memory input: navigate address suggestions
+- `Esc` or `Tab` in the physical-memory input: leave input focus
+- `j` / `k`: scroll the `/proc/iomem` column when the physical-memory input is not focused
+- `w`: toggle word wrapping in logs
+- `q` or `Ctrl+C`: quit
 
-### smaps Integration
-- On process selection, `/proc/PID/smaps` is parsed
-- Merges with eBPF-tracked ranges
-- Adds labels like `[stack]`, `[heap]`, `[vdso]`, anonymous regions, mapped files
-- Provides complete memory map even for pre-existing allocations
+## Project Layout
 
-### Status Visualization
-- Status bars show proportional colored segments for INIT/SWAP/UNSWAP pages
-- Percentages calculated relative to total range size
-- Empty portions shown as gray
-- Text overlay displays addresses and size at bar ends
+- `cmd/deep_in_memory`: application entrypoint
+- `internal/app`: orchestration, async DB writer, log aggregation, DB update helpers
+- `internal/data`: process model, `smaps`, `pagemap`, and `iomem` parsing
+- `internal/ebpf`: shared collector plumbing and individual eBPF collectors
+- `internal/ui`: Bubble Tea model, messages, and rendering
+- `internal/thirdparty/db`: BoltDB wrapper used by the application
+- `playground`: test programs, screenshots, and notes for exercising memory events
 
-## Limitations & Future Work
+## Example Workflow With playground
 
-- Physical memory (PFN) tracking is placeholder (infrastructure ready, full tracking pending)
-- Swap tracking uses kprobes (may be kernel-version sensitive)
-- High-frequency events (many page faults) may cause performance overhead
-- Database cleared on startup (no persistent history across runs)
+The `playground` directory contains small C programs that generate predictable memory events:
 
-## License
+- `test_mmap.c`: large allocations that typically go through `mmap`/`munmap`
+- `test_brk.c`: smaller allocations that tend to exercise heap growth paths
+- `test_threads.c`: multi-threaded allocation scenario
+- `test_all.c`: guided multi-scenario flow with prompts between steps
 
-Dual BSD/GPL (see source files)
+Example:
 
-## Requirements Summary
-- **OS**: Linux with eBPF support (kernel 5.8+recommended)
-- **Go**: 1.21 or later
-- **Build tools**: clang, llvm, kernel headers
-- **Runtime**: Root/CAP_BPF privileges for eBPF operations
+```bash
+gcc -O2 -pthread -o playground/test_all playground/test_all.c
+./playground/test_all
+```
+
+Suggested workflow:
+
+1. start `deep_in_memory` with sufficient privileges
+2. launch one of the `playground` binaries in a second terminal
+3. select that process in the TUI and press `Enter`
+4. step through the test program and observe range creation, page faults, swaps, and log output
+
+## Test
+
+Run the Go test suite:
+
+```bash
+make test
+```
+
+This executes:
+
+```bash
+go test -v ./... -coverpkg=./... -coverprofile=coverage.out
+```
+
+## Architecture Notes
+
+- traced events are persisted in BoltDB, then periodically reloaded into the UI dataset
+- address-level page offsets are stored separately from the lighter process model used for rendering
+- an async writer serializes DB mutations so the UI thread does not block on storage
+- a central event collector batches and sorts events by timestamp to preserve cross-collector order
+
+## Known Constraints
+
+- Linux-only
+- no persisted historical session across launches because database files are deleted on startup
+- physical frame and `/proc/iomem` correlation depends on permissions and kernel exposure
+- tracing only applies to the PID currently selected in the UI

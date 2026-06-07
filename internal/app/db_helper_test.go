@@ -280,30 +280,3 @@ func TestUpsertProcess_NilRecord(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot upsert nil")
 }
-
-func TestGetOrCreateProcess_Existing(t *testing.T) {
-	db := newPIDAwareMockDB()
-	addrDB := newMockDB[data.AddressData]()
-	h := NewDBHelper(db, addrDB, nil)
-
-	db.store["100"] = &data.ProcessData{
-		Proc: data.Process{PID: 100, Name: "existing"},
-	}
-
-	proc, isNew, err := h.GetOrCreateProcess(100, "test")
-	require.NoError(t, err)
-	assert.False(t, isNew)
-	assert.Equal(t, "existing", proc.Proc.Name)
-}
-
-func TestGetOrCreateProcess_New(t *testing.T) {
-	db := newPIDAwareMockDB()
-	addrDB := newMockDB[data.AddressData]()
-	h := NewDBHelper(db, addrDB, nil)
-
-	proc, isNew, err := h.GetOrCreateProcess(100, "new_proc")
-	require.NoError(t, err)
-	assert.True(t, isNew)
-	assert.Equal(t, 100, proc.Proc.PID)
-	assert.Equal(t, "new_proc", proc.Proc.Name)
-}

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"deep_in_memory/internal/data"
+	"deep_in_memory/internal/data/proc"
 	uimsg "deep_in_memory/internal/ui/msg"
 	uirender "deep_in_memory/internal/ui/render"
 )
@@ -111,7 +112,7 @@ func (m *Model) performPagemapLookup() (tea.Model, tea.Cmd) {
 
 	// Return command that performs async pagemap lookup
 	return m, func() tea.Msg {
-		entry, err := data.ReadPagemap(pid, vaddr)
+		entry, err := proc.ReadPagemap(pid, vaddr)
 		if err != nil {
 			return uimsg.PagemapLookupResponse{
 				Lines:      []string{fmt.Sprintf("Error: %v", err)},
@@ -120,7 +121,7 @@ func (m *Model) performPagemapLookup() (tea.Model, tea.Cmd) {
 			}
 		}
 
-		lines := data.FormatPagemapEntry(entry)
+		lines := proc.FormatPagemapEntry(entry)
 		return uimsg.PagemapLookupResponse{
 			Lines:      lines,
 			PFN:        entry.PFN,
@@ -210,7 +211,7 @@ func (m *Model) updateSuggestions() {
 
 	for _, thread := range pd.Threads {
 		for _, r := range thread.Ranges {
-			addrs := data.GeneratePageAlignedAddresses(r.StartVal, r.EndVal, prefix, maxSuggestions)
+			addrs := proc.GeneratePageAlignedAddresses(r.StartVal, r.EndVal, prefix, maxSuggestions)
 			for _, addr := range addrs {
 				if !seen[addr] {
 					seen[addr] = true

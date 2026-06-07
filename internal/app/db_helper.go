@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/timshannon/bolthold"
 
@@ -53,33 +52,6 @@ func (h *DBHelper) reportError(err error) {
 // pidKey returns the string key used for database operations.
 func pidKey(pid int) string {
 	return fmt.Sprintf("%d", pid)
-}
-
-// GetOrCreateProcess retrieves a process or creates a new one if it doesn't exist
-// Returns error if the process has already exited (prevents recreation from stale events)
-func (h *DBHelper) GetOrCreateProcess(pid int, name string) (*data.ProcessData, bool, error) {
-
-	// Try to find existing process
-	records, err := h.db.Query(bolthold.Where("Proc.PID").Eq(pid))
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to query process %d: %w", pid, err)
-	}
-
-	if len(records) > 0 {
-		return &records[0], false, nil // Found existing process
-	}
-
-	// Create new process
-	record := &data.ProcessData{
-		Proc: data.Process{
-			PID:       pid,
-			Name:      name,
-			StartTime: time.Now().UTC(),
-		},
-		Threads: []data.ThreadData{},
-	}
-
-	return record, true, nil // Created new process, isNew = true
 }
 
 // getProcess retrieves a process from database without creating it

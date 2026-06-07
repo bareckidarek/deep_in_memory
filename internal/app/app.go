@@ -8,6 +8,7 @@ import (
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
+	"deep_in_memory/internal/data/proc"
 	storedb "deep_in_memory/internal/thirdparty/db"
 	uimodel "deep_in_memory/internal/ui/model"
 	uimsg "deep_in_memory/internal/ui/msg"
@@ -170,7 +171,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case uimsg.LoadSmapsRequest:
 		// Read /proc smaps synchronously (fast I/O), queue DB write async
-		threads, err := data.LoadSmapsRanges(v.PID)
+		threads, err := proc.LoadSmapsRanges(v.PID)
 		if err != nil || len(threads) == 0 {
 			return m, nil
 		}
@@ -224,7 +225,7 @@ func (m *Model) reload() {
 
 // loadIomem reads /proc/iomem and returns an IomemLoadResponse message.
 func loadIomem() uimsg.IomemLoadResponse {
-	ranges, err := data.LoadIomem()
+	ranges, err := proc.LoadIomem()
 	if err != nil {
 		return uimsg.IomemLoadResponse{}
 	}

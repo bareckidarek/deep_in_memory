@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -63,25 +62,4 @@ func ProcessEventsBatched[T any](
 			collector.AddEvent(tsEvent)
 		}
 	}
-}
-
-// CleanupFunc creates a cleanup function that properly closes multiple resources.
-// Closes resources in reverse order to ensure dependent resources are closed first.
-// Returns the last encountered error if any close operation fails.
-func CleanupFunc(closers ...interface{ Close() error }) func() error {
-	return func() error {
-		var lastErr error
-		// Close in reverse order
-		for i := len(closers) - 1; i >= 0; i-- {
-			if err := closers[i].Close(); err != nil {
-				lastErr = err
-			}
-		}
-		return lastErr
-	}
-}
-
-// FormatEbpfError creates a consistent error message for eBPF operations
-func FormatEbpfError(operation string, err error) error {
-	return fmt.Errorf("%s: %w", operation, err)
 }
