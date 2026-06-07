@@ -11,7 +11,6 @@ import (
 // Uses RWMutex to allow concurrent reads while ensuring exclusive writes.
 type SharedState struct {
 	mu        sync.RWMutex
-	targetPID int
 	ebpfMap   *ebpf.Map
 }
 
@@ -29,8 +28,6 @@ func NewSharedState(ebpfMap *ebpf.Map) *SharedState {
 func (s *SharedState) SetTargetPID(pid int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	s.targetPID = pid
 
 	// Update eBPF map - assuming it's an array map with single element at index 0
 	if s.ebpfMap != nil {

@@ -93,12 +93,6 @@ type LogsResponseMsg struct {
 	Logs []string // Pre-formatted log lines with timestamps
 }
 
-// PagemapLookupRequest is sent when user submits a virtual address for pagemap lookup.
-type PagemapLookupRequest struct {
-	PID   int
-	VAddr uint64
-}
-
 // PagemapLookupResponse contains the result of a pagemap lookup.
 type PagemapLookupResponse struct {
 	Lines      []string // Formatted pagemap entry lines

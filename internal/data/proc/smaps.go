@@ -1,4 +1,4 @@
-package data
+package proc
 
 import (
 	"bufio"
@@ -6,11 +6,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"deep_in_memory/internal/data"
 )
 
 // LoadSmapsRanges reads /proc/PID/smaps and returns memory ranges as ThreadData.
 // All ranges are assigned to TID=PID since smaps doesn't distinguish threads.
-func LoadSmapsRanges(pid int) ([]ThreadData, error) {
+func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 	smapsPath := fmt.Sprintf("/proc/%d/smaps", pid)
 	file, err := os.Open(smapsPath)
 	if err != nil {
@@ -18,10 +20,10 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 	}
 	defer file.Close()
 
-	var ranges []AddrRange
+	var ranges []data.AddrRange
 	scanner := bufio.NewScanner(file)
 
-	var currentRange *AddrRange
+	var currentRange *data.AddrRange
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -64,20 +66,20 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 			}
 
 			size := endAddr - startAddr
-			newRange := AddrRange{
+			newRange := data.AddrRange{
 				Start:    parts[0],
 				End:      parts[1],
 				StartVal: startAddr,
 				EndVal:   endAddr,
-				Size:     size / PageSizeBytes,
-				Statuses: make(map[string]*StatusCount),
+				Size:     size / data.PageSizeBytes,
+				Statuses: make(map[string]*data.StatusCount),
 				Label:    label,
 			}
 
 			// Initialize counters to zero
-			newRange.Statuses["INIT"] = &StatusCount{Count: 0}
-			newRange.Statuses["SWAP"] = &StatusCount{Count: 0}
-			newRange.Statuses["UNSWAP"] = &StatusCount{Count: 0}
+			newRange.Statuses["INIT"] = &data.StatusCount{Count: 0}
+			newRange.Statuses["SWAP"] = &data.StatusCount{Count: 0}
+			newRange.Statuses["UNSWAP"] = &data.StatusCount{Count: 0}
 
 			currentRange = &newRange
 		} else if currentRange != nil {
@@ -110,10 +112,10 @@ func LoadSmapsRanges(pid int) ([]ThreadData, error) {
 	}
 
 	// Sort ranges before returning
-	SortRanges(ranges)
+	data.SortRanges(ranges)
 
 	// Return all ranges under a single ThreadData with TID=PID
-	return []ThreadData{
+	return []data.ThreadData{
 		{
 			TID:    pid,
 			Ranges: ranges,
@@ -170,7 +172,7 @@ func parseKBToPages(line string) int {
 	}
 
 	// Convert kB to pages using the system page size
-	pageSizeKB := int64(PageSizeBytes / 1024)
+	pageSizeKB := int64(data.PageSizeBytes / 1024)
 	if pageSizeKB == 0 {
 		pageSizeKB = 4
 	}
