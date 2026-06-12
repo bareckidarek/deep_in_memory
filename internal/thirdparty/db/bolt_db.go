@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/timshannon/bolthold"
+	"github.com/vmihailenco/msgpack/v5"
 	"go.etcd.io/bbolt"
 )
 
@@ -12,7 +13,13 @@ type BoltDb[T any] struct {
 }
 
 func New[T any](dbname string) (Db[T], error) {
-	database, err := bolthold.Open(fmt.Sprintf("%s.db", dbname), 0600, nil)
+	database, err := bolthold.Open(fmt.Sprintf("%s.db", dbname), 0600, &bolthold.Options{
+		Encoder: func(v interface{}) ([]byte, error) {
+			return msgpack.Marshal(v)
+		},
+		Decoder: func(data []byte, v interface{}) error {
+			return msgpack.Unmarshal(data, v)
+		}})
 	if err != nil {
 		return nil, err
 	}

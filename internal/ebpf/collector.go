@@ -10,8 +10,8 @@ import (
 // Manages the target PID for filtering events across multiple collectors.
 // Uses RWMutex to allow concurrent reads while ensuring exclusive writes.
 type SharedState struct {
-	mu        sync.RWMutex
-	ebpfMap   *ebpf.Map
+	mu      sync.RWMutex
+	ebpfMap *ebpf.Map
 }
 
 // NewSharedState creates a new shared state instance for managing eBPF resources.

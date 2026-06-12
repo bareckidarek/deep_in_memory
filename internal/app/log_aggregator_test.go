@@ -115,7 +115,7 @@ func TestGetFormattedLogs_Format(t *testing.T) {
 	assert.Contains(t, logs[0], "PID:100")
 	assert.Contains(t, logs[0], "TID:101")
 	assert.Contains(t, logs[0], "mmap")
-	assert.Contains(t, logs[0], "pages: 1")
+	assert.Contains(t, logs[0], "count: 1")
 	assert.Contains(t, logs[0], "0x1000")
 }
 

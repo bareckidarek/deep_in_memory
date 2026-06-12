@@ -57,6 +57,8 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 
 	doSwapPageKprobe, err := link.Kprobe("do_swap_page", objs.KprobeDoSwapPage, nil)
 	if err != nil {
+		doAnonymousPageKretprobe.Close()
+		doAnonymousPageKprobe.Close()
 		objs.Close()
 		return nil, fmt.Errorf("attach kprobe do_swap_page: %w", err)
 	}
@@ -64,6 +66,8 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 	doSwapPageKretprobe, err := link.Kretprobe("do_swap_page", objs.KretprobeDoSwapPage, nil)
 	if err != nil {
 		doSwapPageKprobe.Close()
+		doAnonymousPageKretprobe.Close()
+		doAnonymousPageKprobe.Close()
 		objs.Close()
 		return nil, fmt.Errorf("attach kretprobe do_swap_page: %w", err)
 	}
@@ -72,6 +76,8 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 	if err != nil {
 		doSwapPageKretprobe.Close()
 		doSwapPageKprobe.Close()
+		doAnonymousPageKretprobe.Close()
+		doAnonymousPageKprobe.Close()
 		objs.Close()
 		return nil, fmt.Errorf("attach kprobe swap_writepage: %w", err)
 	}

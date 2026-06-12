@@ -2,7 +2,6 @@ package data
 
 import "fmt"
 
-
 // getOrCreateThread returns the index of the thread with the given TID,
 // creating it if it doesn't exist. Returns the thread index.
 func (pd *ProcessData) getOrCreateThread(tid int) int {
