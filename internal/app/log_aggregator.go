@@ -139,7 +139,7 @@ func (la *LogAggregator) GetFormattedLogs() []string {
 		timestamp := entry.Timestamp.Format("2006-01-02 15:04:05")
 		addrStr := formatAddressRanges(entry.Addresses)
 		displayType := formatEventType(entry.EventType)
-		lines[i] = fmt.Sprintf("%s | PID:%d, TID:%d | %s -> pages: %d, addresses: %s",
+		lines[i] = fmt.Sprintf("%s | PID:%d, TID:%d | %s -> count: %d, addresses: %s",
 			timestamp, entry.PID, entry.TID, displayType, entry.Count, addrStr)
 	}
 	return lines

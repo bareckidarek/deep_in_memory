@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -81,6 +82,18 @@ func (m *Model) Init() tea.Cmd {
 		// Load /proc/iomem on startup
 		func() tea.Msg {
 			return loadIomem()
+		},
+		// Enqueue myself process data
+		func() tea.Msg {
+			me := uimsg.ProcessExec{
+				PID:       os.Getpid(),
+				Comm:      os.Args[0],
+				Timestamp: time.Now(),
+			}
+			m.asyncWriter.Enqueue(me.PID, func(h *DBHelper) error {
+				return h.HandleProcessExec(me)
+			})
+			return nil
 		},
 	)
 }
