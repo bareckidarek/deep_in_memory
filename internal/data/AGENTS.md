@@ -1,23 +1,159 @@
-# AGENTS.md
+# AGENTS.md — internal/data
 
-This directory inherits the repository-root [AGENTS.md](../../AGENTS.md).
+## Package Overview
 
-## Scope
+`internal/data` is the pure data layer — no UI imports, no eBPF imports, no side effects.
+It defines all persistent data types, provides mutation helpers for virtual address ranges,
+implements cached address lookup, and assembles `Dataset` objects for the UI.
 
-`internal/data` contains process/state models and parsers for `/proc`, pagemap lookups, range caching, and dataset assembly.
+`internal/data/proc` is a sub-package that reads Linux `/proc` virtual filesystem entries:
+`/proc/PID/smaps`, `/proc/PID/pagemap`, and `/proc/iomem`.
 
-## Working Notes
+**Files:**
 
-- Keep parsing code deterministic and testable; prefer pure transformations over side effects.
-- Preserve the distinction between process-level data and address/page-level data.
-- Any change to `/proc` parsing may affect `dataset.go`, `process_ranges.go`, `range_cache.go`, and `proc/*` together.
+| File | Responsibility |
+|------|----------------|
+| `types.go` | Core data types: `ProcessData`, `Process`, `ThreadData`, `AddrRange`, `StatusCount`, `AddressData` |
+| `dataset.go` | `BuildDataset` — assembles and sorts `Dataset` from a flat slice of `ProcessData` |
+| `process_ranges.go` | Range mutation: `AddMmapRange`, `ExtendBrkRange`, `RemoveMmapRange` |
+| `range_cache.go` | `RangeCache` — binary-search cache for fast `FindRangeForAddr` lookups |
+| `range_status.go` | `SortRanges` — stable sort by `StartVal` |
+| `address_data.go` | `AddressData` / `AddPageOffset` — page-offset detail stored in the address DB |
+| `proc/smaps.go` | `LoadSmapsRanges` — parses `/proc/PID/smaps` |
+| `proc/pagemap.go` | `ReadPagemap` — reads a single `/proc/PID/pagemap` entry |
+| `proc/iomem.go` | `LoadIomem` — parses `/proc/iomem` |
+
+---
+
+## Data model
+
+### Two-database split
+
+| DB | Type | Content |
+|----|------|---------|
+| Main (`deep_in_memory.db`) | `ProcessData` | Process metadata, thread list, address ranges, **page counts** (`StatusCount`) |
+| Address (`deep_in_memory_addresses.db`) | `AddressData` | Per-page offset lists per status per range — **never** loaded into the UI directly |
+
+`StatusCount.Count` in `ProcessData` is always a mirror of `len(StatusOffsets.Value)` in `AddressData`.
+`db_helper.go` in `internal/app` is responsible for keeping them in sync.
+
+### Status codes used in maps
+
+| Key | Meaning |
+|-----|---------|
+| `"INIT"` | Page anonymously faulted in (`do_anonymous_page`) |
+| `"SWAP"` | Page written to swap (`swap_writepage`) |
+| `"UNSWAP"` | Page read back from swap (`do_swap_page`) |
+
+---
+
+## Range mutation API
+
+All three methods live on `*ProcessData` in `process_ranges.go` and invalidate the `RangeCache`
+for the affected TID after mutation.
+
+### `AddMmapRange(tid int, addr uint64, length uint64)`
+
+Adds a new `AddrRange` for `mmap` allocations. Computes `Size = length / PageSizeBytes`, formats
+hex start/end strings, appends, and calls `SortRanges`.
+
+### `ExtendBrkRange(tid int, brk uint64, ret uint64)`
+
+Manages a special `[heap]` range:
+- `brk == 0` → query: creates the initial `[heap]` range with `StartVal = EndVal = ret`.
+- `brk != 0` → extend/shrink: adjusts `EndVal` and `Size` of the existing `[heap]` range.
+
+### `RemoveMmapRange(tid int, addr uint64, length uint64)`
+
+Removes all ranges that **overlap** with `[addr, addr+length)`. Uses inclusive start / exclusive end
+comparison: `r.StartVal < endAddr && r.EndVal > addr`.
+
+---
+
+## RangeCache — fast address lookup
+
+`FindRangeForAddr(tid int, addr uint64) *AddrRange` is called for every paging event. It uses a
+binary-search over a sorted `StartVals []uint64` slice to achieve O(log n) lookups.
+
+Cache is rebuilt when:
+- A range is added/removed (explicit `invalidateRangeCache(tid)`).
+- The cache is empty.
+- More than `constants.RangeCacheRefreshInterval` (100 ms) has passed since last rebuild.
+
+The cache lives inside `ProcessData.rangeCache map[int]*RangeCache` (unexported), so it is **not**
+persisted to BoltDB. It is always rebuilt on first use after deserialization.
+
+---
+
+## BuildDataset
+
+```go
+func BuildDataset(processes []ProcessData) Dataset
+```
+
+Creates `Dataset{Processes map[int]*ProcessData, Order []int}`. Sorts `Order` by `Process.StartTime`
+(ascending), using PID as a tiebreaker. Called:
+- On startup with an empty slice.
+- After each periodic DB reload in `app.go`.
+
+---
+
+## proc sub-package
+
+### LoadSmapsRanges(pid int) ([]ThreadData, error)
+
+Reads `/proc/PID/smaps`. All ranges are assigned `TID = PID` (smaps has no thread granularity).
+Extracts hex address range, label (file path, `[heap]`, `[stack]`, `[anon: ...]`, etc.), and
+page counts from `Rss:` / `Swap:` lines via `parseKBToPages`.
+
+**Label extraction rules (`extractLabel`):**
+- Field 6+ present: if starts with `[` or `/` or `anon_inode:` → use joined remainder as label.
+- Numeric-only remainder → return `""`.
+- Otherwise → return field 6 as label.
+
+### ReadPagemap(pid int, vaddr uint64) (*PagemapEntry, error)
+
+Reads a single 8-byte entry from `/proc/PID/pagemap`. Bit layout:
+
+| Bits | Field |
+|------|-------|
+| 63 | Present |
+| 62 | Swapped |
+| 61 | File/shared page |
+| 56 | Exclusively mapped |
+| 55 | Soft-dirty |
+| 54–0 | PFN (if present) or swap type/offset |
+
+Requires `CAP_SYS_ADMIN` (or ptrace capability) for accurate PFN values.
+
+### LoadIomem() ([]IomemRange, error)
+
+Reads `/proc/iomem`. Parses lines of the form `  start-end : Name`.
+Returns `[]IomemRange{Start, End, Name, Level}` where `Level` is determined by leading-space indentation
+(2 spaces per level). Requires root or `CAP_SYS_RAWIO` for non-zero addresses.
+
+---
 
 ## Testing
 
-- Prefer focused package tests: `go test ./internal/data/...`
-- Existing tests live in `data_test.go` and `proc/smaps_test.go`.
+```bash
+go test ./internal/data/...
+go test ./internal/data/proc -run TestExtractLabel_BracketedLabel
+```
 
-## Change Rules
+Tests are in:
+- `internal/data/data_test.go` — covers `ProcessData` helpers, range mutation, `BuildDataset`.
+- `internal/data/proc/smaps_test.go` — covers `extractLabel`, `parseKBToPages`.
 
-- Avoid embedding UI concerns here; this package should stay focused on data normalization and parsing.
-- Keep time and ordering logic stable, especially in dataset assembly and process sorting.
+Use `testify/assert` and `require`. Prefer table-driven tests (see `TestParseKBToPages` as a model).
+
+---
+
+## Key constraints
+
+- **No UI imports.** `internal/data` must never import `internal/ui/*`.
+- **No eBPF imports.** Data types are populated by `internal/app` — not by eBPF packages directly.
+- `PageSizeBytes` is initialized in `init()` via `syscall.Getpagesize()`. Do not hardcode 4096.
+- `RangeCache` is unexported and never serialized — always rebuild after deserialization.
+- `AddressData` is only read by the physical memory lookup in `internal/ui/model/model_physical.go`;
+  it is **never** part of `Dataset` and is never passed to render helpers.
