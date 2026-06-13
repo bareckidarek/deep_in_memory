@@ -176,7 +176,6 @@ func configLogger() {
 	log.SetOutput(logFile)
 }
 
-
 // DEBUG only: startHttpServer initializes an HTTP server with pprof handlers for profiling.
 func startHttpServer() {
 	mux := http.NewServeMux()
