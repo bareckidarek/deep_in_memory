@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -102,6 +105,10 @@ func main() {
 		})
 	})
 
+	if os.Getenv("DEBUG") == "true" {
+		startHttpServer()
+	}
+
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("tui error: %v", err)
 	}
@@ -167,4 +174,33 @@ func configLogger() {
 	}
 
 	log.SetOutput(logFile)
+}
+
+
+// DEBUG only: startHttpServer initializes an HTTP server with pprof handlers for profiling.
+func startHttpServer() {
+	mux := http.NewServeMux()
+	registerPprofHandlers(mux)
+
+	srv := &http.Server{Addr: fmt.Sprintf(":%s", "8080"), Handler: mux}
+	go func() {
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[api] Cannot start ListenAndServe: %v", err)
+		}
+
+	}()
+}
+
+func registerPprofHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	mux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	mux.Handle("/debug/pprof/block", pprof.Handler("block"))
+	mux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	mux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	mux.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	mux.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
 }
