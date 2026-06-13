@@ -11,7 +11,7 @@ test/
 bin/
 
 #Ignore binary
-deep_in_memory
+/deep_in_memory
 
 #Ignore coverage reports
 coverage.out
