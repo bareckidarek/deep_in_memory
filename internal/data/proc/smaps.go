@@ -72,6 +72,7 @@ func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 				StartVal: startAddr,
 				EndVal:   endAddr,
 				Size:     size / data.PageSizeBytes,
+				PrevSize: size / data.PageSizeBytes, // Initialize PrevSize to current size
 				Statuses: make(map[string]*data.StatusCount),
 				Label:    label,
 			}

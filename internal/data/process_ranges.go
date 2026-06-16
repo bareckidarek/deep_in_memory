@@ -1,6 +1,9 @@
 package data
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // getOrCreateThread returns the index of the thread with the given TID,
 // creating it if it doesn't exist. Returns the thread index.
@@ -30,12 +33,14 @@ func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
 	startAddr := addr
 	endAddr := addr + length
 	newRange := AddrRange{
-		Start:    fmt.Sprintf("%x", startAddr),
-		End:      fmt.Sprintf("%x", endAddr),
-		StartVal: startAddr,
-		EndVal:   endAddr,
-		Size:     length / PageSizeBytes,
-		Statuses: make(map[string]*StatusCount),
+		Start:     fmt.Sprintf("%x", startAddr),
+		End:       fmt.Sprintf("%x", endAddr),
+		StartVal:  startAddr,
+		EndVal:    endAddr,
+		Size:      length / PageSizeBytes,
+		PrevSize:  length / PageSizeBytes, // Equal to Size: no arrow on initial creation
+		Statuses:  make(map[string]*StatusCount),
+		ChangedAt: time.Now(), // Highlight new ranges
 	}
 
 	pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
@@ -102,17 +107,37 @@ func (pd *ProcessData) ExtendBrkRange(tid int, brk uint64, ret uint64) {
 	heap := &pd.Threads[threadIdx].Ranges[heapIdx]
 	if ret > heap.EndVal {
 		// Heap is growing
+		oldSize := heap.Size
 		heap.End = fmt.Sprintf("%x", ret)
 		heap.EndVal = ret
 		heap.Size = (ret - heap.StartVal) / PageSizeBytes
+		if heap.Size != oldSize {
+			if oldSize == 0 && heap.PrevSize == 0 {
+				// First resize from zero: record current size so no arrow is shown
+				heap.PrevSize = heap.Size
+			} else {
+				heap.PrevSize = oldSize
+			}
+			heap.ChangedAt = time.Now()
+		}
 	} else if ret < heap.EndVal {
 		// Heap is shrinking
+		oldSize := heap.Size
 		heap.End = fmt.Sprintf("%x", ret)
 		heap.EndVal = ret
 		if ret > heap.StartVal {
 			heap.Size = (ret - heap.StartVal) / PageSizeBytes
 		} else {
 			heap.Size = 0
+		}
+		if heap.Size != oldSize {
+			if oldSize == 0 && heap.PrevSize == 0 {
+				// First resize from zero: record current size so no arrow is shown
+				heap.PrevSize = heap.Size
+			} else {
+				heap.PrevSize = oldSize
+			}
+			heap.ChangedAt = time.Now()
 		}
 	}
 	// If ret == heap.EndVal, no change needed

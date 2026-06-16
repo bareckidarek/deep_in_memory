@@ -18,6 +18,12 @@ presents results in an interactive Bubble Tea terminal interface.
 
 The binary requires Linux with BTF support, kernel headers, and `CAP_BPF` / root privileges at runtime.
 
+## Additional layer AGENTS.md
+- internal/app/AGENTS.md
+- internal/data/AGENTS.md
+- internal/ebpf/AGENTS.md
+- internal/ui/AGENTS.md
+
 ---
 
 ## Setup Commands

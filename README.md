@@ -29,9 +29,9 @@ Built with eBPF for zero-overhead kernel tracing and a Bubble Tea TUI for intera
 |-------------|-----------|-----------------|
 | `sched_process_exec` tracepoint | `ProcessExec` | New process started |
 | `sched_process_exit` tracepoint | `ProcessExit` | Process exited |
-| `sys_enter/exit_mmap` tracepoints | `ProcessMmap` | `mmap` syscall completed — new virtual range |
-| `sys_enter/exit_munmap` tracepoints | `ProcessMunmap` | `munmap` syscall — range freed |
-| `sys_enter/exit_brk` tracepoints | `ProcessBrk` | `brk` syscall — heap grow/shrink |
+| `sys_[enter/exit]_mmap` tracepoints | `ProcessMmap` | `mmap` syscall — new virtual range |
+| `sys_[enter/exit]_munmap` tracepoints | `ProcessMunmap` | `munmap` syscall — range freed |
+| `sys_[enter/exit]_brk` tracepoints | `ProcessBrk` | `brk` syscall — heap grow/shrink |
 | `do_anonymous_page` kprobe | `INIT` status | Page lazily allocated (first write fault) |
 | `swap_writepage` kprobe | `SWAP` status | Page evicted to swap |
 | `do_swap_page` kprobe | `UNSWAP` status | Page read back from swap |
