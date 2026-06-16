@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"time"
@@ -246,7 +247,9 @@ func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) strin
 			rangeConn = "└─"
 		}
 
-		b.WriteString(fmt.Sprintf("%s%s %s\n", prefix, rangeConn, renderRangeBar(item.range_, barWidth)))
+		highlighted := !item.range_.ChangedAt.IsZero() && time.Since(item.range_.ChangedAt) < constants.RangeHighlightDuration
+		bar := renderRangeBar(item.range_, barWidth, highlighted)
+		b.WriteString(fmt.Sprintf("%s%s %s\n", prefix, rangeConn, bar))
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -259,7 +262,8 @@ type segment struct {
 }
 
 // renderRangeBar creates a visual memory bar with status segments and text overlay.
-func renderRangeBar(r data.AddrRange, barWidth int) string {
+// highlighted switches to lighter background colours and bold text for 3 seconds after a change.
+func renderRangeBar(r data.AddrRange, barWidth int, highlighted bool) string {
 	if r.Size == 0 {
 		return fmt.Sprintf("%s [invalid range] %s", r.Start, r.End)
 	}
@@ -268,7 +272,7 @@ func renderRangeBar(r data.AddrRange, barWidth int) string {
 	segmentList := calculateStatusSegments(r, expandedBarWidth)
 	overlayText := buildOverlayText(r, expandedBarWidth)
 
-	return renderColoredBar(segmentList, overlayText)
+	return renderColoredBar(segmentList, overlayText, highlighted)
 }
 
 // calculateStatusSegments computes the proportional width of each memory status segment.
@@ -315,15 +319,15 @@ func buildOverlayText(r data.AddrRange, expandedBarWidth int) string {
 
 // buildLabelOverlay creates overlay text with a centered label
 func buildLabelOverlay(r data.AddrRange, startAddr string, expandedBarWidth int) string {
-	sizeBytes := r.Size * data.PageSizeBytes
-	endInfo := fmt.Sprintf("%s (100%%=%dp [%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)))
+	endInfo := buildEndInfo(r)
+	endInfoWidth := lipgloss.Width(endInfo)
 
 	labelText := r.Label
 	middlePos := (expandedBarWidth - len(labelText)) / 2
 	if middlePos < len(startAddr)+1 {
 		middlePos = len(startAddr) + 1
 	}
-	endPos := expandedBarWidth - len(endInfo)
+	endPos := expandedBarWidth - endInfoWidth
 	if endPos < middlePos+len(labelText)+1 {
 		endPos = middlePos + len(labelText) + 1
 	}
@@ -336,38 +340,62 @@ func buildLabelOverlay(r data.AddrRange, startAddr string, expandedBarWidth int)
 
 // buildAddressOverlay creates overlay text with start and end addresses
 func buildAddressOverlay(r data.AddrRange, startAddr string, expandedBarWidth int) string {
-	sizeBytes := r.Size * data.PageSizeBytes
-	endInfo := fmt.Sprintf("%s (100%%=%dp [%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)))
+	endInfo := buildEndInfo(r)
+	endInfoWidth := lipgloss.Width(endInfo)
 
-	overlayText := startAddr + strings.Repeat(" ", expandedBarWidth-len(startAddr)-len(endInfo)) + endInfo
+	overlayText := startAddr + strings.Repeat(" ", expandedBarWidth-len(startAddr)-endInfoWidth) + endInfo
 	return truncateOverlayText(overlayText, expandedBarWidth)
 }
 
+func buildEndInfo(r data.AddrRange) string {
+	sizeBytes := r.Size * data.PageSizeBytes
+	log.Printf("Size vs PrevSize: %d vs %d", r.Size, r.PrevSize)
+	return fmt.Sprintf("%s (100%%=%dp [%s%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)), buildGrowthArrow(int64(r.Size-r.PrevSize)))
+}
+
+func buildGrowthArrow(growth int64) string {
+	arrow := ""
+	if growth > 0 {
+		arrow = "➚"
+	} else if growth < 0 {
+		arrow = "➘"
+	}
+	return arrow
+}
+
+
 // truncateOverlayText ensures overlay text fits within the bar width
 func truncateOverlayText(overlayText string, maxWidth int) string {
-	if len(overlayText) > maxWidth {
+	if lipgloss.Width(overlayText) > maxWidth {
 		return overlayText[:maxWidth]
-	} else if len(overlayText) < maxWidth {
-		return overlayText + strings.Repeat(" ", maxWidth-len(overlayText))
+	} else if lipgloss.Width(overlayText) < maxWidth {
+		return overlayText + strings.Repeat(" ", maxWidth-lipgloss.Width(overlayText))
 	}
 	return overlayText
 }
 
-// renderColoredBar renders the final colored bar with text overlay
-func renderColoredBar(segmentList []segment, overlayText string) string {
+// renderColoredBar renders the final colored bar with text overlay.
+// When highlighted is true, lighter background colours and bold text are used.
+func renderColoredBar(segmentList []segment, overlayText string, highlighted bool) string {
 	var result strings.Builder
 	textPos := 0
 
 	for _, seg := range segmentList {
-		bgColor := colorForStatus(seg.status)
+		var bgColor string
+		if highlighted {
+			bgColor = highlightColorForStatus(seg.status)
+		} else {
+			bgColor = colorForStatus(seg.status)
+		}
 
 		// Render this segment with overlay text
-		for i := 0; i < seg.width && textPos < len(overlayText); i++ {
-			char := string(overlayText[textPos])
+		runes := []rune(overlayText)
+		for i := 0; i < seg.width && textPos < len(runes); i++ {
+			char := string(runes[textPos])
 			styled := lipgloss.NewStyle().
 				Background(lipgloss.Color(bgColor)).
 				Foreground(lipgloss.Color("#000000")).
-				Bold(true).
+				Bold(highlighted).
 				Render(char)
 			result.WriteString(styled)
 			textPos++
@@ -375,6 +403,20 @@ func renderColoredBar(segmentList []segment, overlayText string) string {
 	}
 
 	return result.String()
+}
+
+// highlightColorForStatus returns the lighter background colour used when a range row is highlighted.
+func highlightColorForStatus(status string) string {
+	switch status {
+	case "INIT":
+		return constants.LightGreenColor
+	case "SWAP":
+		return constants.LightRedColor
+	case "UNSWAP":
+		return constants.LightBlueColor
+	default:
+		return constants.LightGrayColor
+	}
 }
 
 func colorForStatus(status string) string {

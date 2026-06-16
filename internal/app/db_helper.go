@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/timshannon/bolthold"
 
@@ -279,6 +280,7 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 		}
 		r.Statuses[s].Count = count
 	}
+	r.ChangedAt = time.Now()
 
 	if err := h.db.Upsert(pidKey(pid), record); err != nil {
 		return fmt.Errorf("failed to upsert process: %w", err)

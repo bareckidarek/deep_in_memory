@@ -62,6 +62,9 @@ const (
 
 	// Event batching flush interval
 	EventBatchFlushInterval = 50 * time.Millisecond
+
+	// RangeHighlightDuration is how long a changed range stays highlighted after ChangedAt is set.
+	RangeHighlightDuration = 3 * time.Second
 )
 
 // Event batching sizes for different collectors
@@ -90,11 +93,18 @@ const (
 
 // Color constants for memory status visualization
 var (
-	// Memory status colors
-	GrayColor  = "#666666" // reservation/unmapped
-	GreenColor = "#00af5f" // allocation (INIT)
-	RedColor   = "#ff5f5f" // page-out (SWAP)
-	BlueColor  = "#5f87ff" // page-in (UNSWAP)
+	// Memory status colors (normal)
+	GrayColor  = "#6b7280" // reservation/unmapped
+	GreenColor = "#6aa88a" // allocation (INIT)
+	RedColor   = "#c98686" // page-out (SWAP)
+	BlueColor  = "#7d93c7" // page-in (UNSWAP)
+
+	// Lighter highlight variants shown for RangeHighlightDuration after a change
+	LightGrayColor  = "#666666" // reservation/unmapped highlight
+	LightGreenColor = "#00af5f" // allocation (INIT) highlight
+	LightRedColor   = "#ff5f5f" // page-out (SWAP) highlight
+	LightBlueColor  = "#5f87ff" // page-in (UNSWAP) highlight
+
 
 	// UI colors
 	SelectedColor    = lipgloss.Color("10")  // Green for selected process

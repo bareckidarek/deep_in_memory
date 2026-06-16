@@ -33,13 +33,15 @@ type ThreadData struct {
 
 // AddrRange represents a virtual address range and statuses.
 type AddrRange struct {
-	Start    string
-	End      string
-	StartVal uint64
-	EndVal   uint64
-	Size     uint64
-	Statuses map[string]*StatusCount
-	Label    string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
+	Start     string
+	End       string
+	StartVal  uint64
+	EndVal    uint64
+	Size      uint64
+	PrevSize  uint64 // Size before the most recent resize (0 == no previous size recorded)
+	Statuses  map[string]*StatusCount
+	Label     string    // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
+	ChangedAt time.Time // Timestamp of the most recent change to this range (zero = never changed)
 }
 
 // StatusCount tracks count of pages in a particular status.
