@@ -2,13 +2,11 @@ package render
 
 import (
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
-
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
 )
@@ -349,7 +347,6 @@ func buildAddressOverlay(r data.AddrRange, startAddr string, expandedBarWidth in
 
 func buildEndInfo(r data.AddrRange) string {
 	sizeBytes := r.Size * data.PageSizeBytes
-	log.Printf("Size vs PrevSize: %d vs %d", r.Size, r.PrevSize)
 	return fmt.Sprintf("%s (100%%=%dp [%s%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)), buildGrowthArrow(int64(r.Size-r.PrevSize)))
 }
 

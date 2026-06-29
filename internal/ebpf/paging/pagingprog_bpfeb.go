@@ -83,7 +83,7 @@ type PagingProgMapSpecs struct {
 	Events               *ebpf.MapSpec `ebpf:"events"`
 	SwapEntries          *ebpf.MapSpec `ebpf:"swap_entries"`
 	SwapWritepageEntries *ebpf.MapSpec `ebpf:"swap_writepage_entries"`
-	TargetPid            *ebpf.MapSpec `ebpf:"target_pid"`
+	TargetPids           *ebpf.MapSpec `ebpf:"target_pids"`
 }
 
 // PagingProgVariableSpecs contains global variables before they are loaded into the kernel.
@@ -116,7 +116,7 @@ type PagingProgMaps struct {
 	Events               *ebpf.Map `ebpf:"events"`
 	SwapEntries          *ebpf.Map `ebpf:"swap_entries"`
 	SwapWritepageEntries *ebpf.Map `ebpf:"swap_writepage_entries"`
-	TargetPid            *ebpf.Map `ebpf:"target_pid"`
+	TargetPids           *ebpf.Map `ebpf:"target_pids"`
 }
 
 func (m *PagingProgMaps) Close() error {
@@ -125,7 +125,7 @@ func (m *PagingProgMaps) Close() error {
 		m.Events,
 		m.SwapEntries,
 		m.SwapWritepageEntries,
-		m.TargetPid,
+		m.TargetPids,
 	)
 }
 

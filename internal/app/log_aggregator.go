@@ -41,6 +41,7 @@ func NewLogAggregator() *LogAggregator {
 			"brk":        make(map[uint64]*eventInfo),
 			"mmap":       make(map[uint64]*eventInfo),
 			"munmap":     make(map[uint64]*eventInfo),
+			"clone":      make(map[uint64]*eventInfo),
 			"init":       make(map[uint64]*eventInfo),
 			"swap_write": make(map[uint64]*eventInfo),
 			"swap_read":  make(map[uint64]*eventInfo),
@@ -68,7 +69,7 @@ func (la *LogAggregator) Record(eventType string, addr uint64, pid, tid int) {
 
 // Flush creates log entries and adds them to history, then clears aggregators.
 // Thread-safe: acquires exclusive lock to ensure atomic flush operation.
-func (la *LogAggregator) Flush(pid int) {
+func (la *LogAggregator) Flush(pids []int) {
 	la.mu.Lock()
 	defer la.mu.Unlock()
 
@@ -77,14 +78,16 @@ func (la *LogAggregator) Flush(pid int) {
 	// Process all event types
 	for eventType, addrMap := range la.events {
 		if len(addrMap) > 0 {
-			la.addToHistoryLocked(LogEntry{
-				Timestamp: now,
-				EventType: eventType,
-				Count:     sumCounts(addrMap),
-				Addresses: getAddresses(addrMap),
-				PID:       pid,
-				TID:       getMostRecentTID(addrMap),
-			})
+			for _, pid := range pids {
+				la.addToHistoryLocked(LogEntry{
+					Timestamp: now,
+					EventType: eventType,
+					Count:     sumCounts(addrMap),
+					Addresses: getAddresses(addrMap),
+					PID:       pid,
+					TID:       getMostRecentTID(addrMap),
+				})
+			}
 			// Clear the map for this event type
 			la.events[eventType] = make(map[uint64]*eventInfo)
 		}
@@ -115,6 +118,8 @@ func formatEventType(eventType string) string {
 		return "virtual memory unmapping [munmap]"
 	case "init":
 		return "lazy physical allocation"
+	case "clone":
+		return "process/thread cloning"
 	case "swap_write":
 		return "page_out"
 	case "swap_read":

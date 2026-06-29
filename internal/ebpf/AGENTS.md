@@ -77,7 +77,7 @@ collectors. Only `sched` sends directly (exec/exit events are not batched throug
 
 ## SharedState
 
-Defined in `collector.go`. Wraps the eBPF `BPF_MAP_TYPE_ARRAY` map that stores the target PID.
+Defined in `collector.go`. Wraps the eBPF `BPF_MAP_TYPE_ARRAY` map that stores the target PIDs.
 All secondary collectors share this map via `MapReplacements` at load time — one eBPF map, one
 kernel filter for all collectors simultaneously.
 
@@ -120,7 +120,7 @@ Every secondary collector (`mmap`, `brk`, `paging`) follows the same structure:
 ```go
 func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sharedState *ebpfshared.SharedState) (func() error, error) {
     // 1. Load BPF spec (LoadXxxProg)
-    // 2. Inject shared target_pid map via MapReplacements
+    // 2. Inject shared target_pids map via MapReplacements
     // 3. Attach links (tracepoints or kprobes)
     // 4. Create ringbuf reader
     // 5. Launch goroutine: ProcessEventsBatched(ctx, reader, processor, collector)

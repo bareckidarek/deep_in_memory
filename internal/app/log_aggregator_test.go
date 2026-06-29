@@ -58,7 +58,7 @@ func TestFlush_CreatesHistoryAndClearsEvents(t *testing.T) {
 	la.Record("mmap", 0x1000, 100, 101)
 	la.Record("brk", 0x2000, 100, 101)
 
-	la.Flush(100)
+	la.Flush([]int{100, 101})
 
 	// Events should be cleared
 	assert.Empty(t, la.events["mmap"])
@@ -70,7 +70,7 @@ func TestFlush_CreatesHistoryAndClearsEvents(t *testing.T) {
 
 func TestFlush_NoEventNoHistory(t *testing.T) {
 	la := NewLogAggregator()
-	la.Flush(100)
+	la.Flush([]int{100, 101})
 	assert.Empty(t, la.history)
 }
 
@@ -78,10 +78,10 @@ func TestFlush_HistoryNewestFirst(t *testing.T) {
 	la := NewLogAggregator()
 
 	la.Record("mmap", 0x1000, 100, 101)
-	la.Flush(100)
+	la.Flush([]int{100, 101})
 
 	la.Record("brk", 0x2000, 100, 101)
-	la.Flush(100)
+	la.Flush([]int{100, 101})
 
 	require.Len(t, la.history, 2)
 	assert.Equal(t, "brk", la.history[0].EventType)  // newest
@@ -94,7 +94,7 @@ func TestFlush_MaxLogsLimit(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		la.Record("mmap", uint64(i*0x1000), 100, 101)
-		la.Flush(100)
+		la.Flush([]int{100, 101})
 	}
 
 	assert.Len(t, la.history, 3)
@@ -108,7 +108,7 @@ func TestGetFormattedLogs_Empty(t *testing.T) {
 func TestGetFormattedLogs_Format(t *testing.T) {
 	la := NewLogAggregator()
 	la.Record("mmap", 0x1000, 100, 101)
-	la.Flush(100)
+	la.Flush([]int{100, 101})
 
 	logs := la.GetFormattedLogs()
 	require.Len(t, logs, 1)

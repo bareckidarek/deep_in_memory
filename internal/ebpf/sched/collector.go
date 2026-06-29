@@ -50,7 +50,7 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, interface{}, 
 	}
 
 	// Create shared state for thread-safe access
-	sharedState := ebpfshared.NewSharedState(objs.TargetPid)
+	sharedState := ebpfshared.NewSharedState(objs.TargetPids)
 
 	go func() {
 		defer reader.Close()

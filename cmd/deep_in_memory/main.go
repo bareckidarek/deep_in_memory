@@ -19,6 +19,7 @@ import (
 	"deep_in_memory/internal/data"
 	ebpfshared "deep_in_memory/internal/ebpf"
 	"deep_in_memory/internal/ebpf/brk"
+	"deep_in_memory/internal/ebpf/clone"
 	"deep_in_memory/internal/ebpf/mmap"
 	"deep_in_memory/internal/ebpf/paging"
 	"deep_in_memory/internal/ebpf/sched"
@@ -132,6 +133,9 @@ func startCollectors(ctx context.Context, send func(tea.Msg), collector *ebpfsha
 	}
 
 	collectors := []collectorDef{
+		{"clone", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
+			return clone.Start(ctx, col, s)
+		}},
 		{"mmap", func(ctx context.Context, col *ebpfshared.CentralEventCollector, s *ebpfshared.SharedState) (func() error, error) {
 			return mmap.Start(ctx, col, s)
 		}},

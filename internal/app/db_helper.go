@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
+	"deep_in_memory/internal/data/proc"
 	storedb "deep_in_memory/internal/thirdparty/db"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
@@ -133,6 +135,45 @@ func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 	return nil
 }
 
+func (h *DBHelper) HandleCloneEvent(ev uimsg.ProcessClone) error {
+		
+	record, err := h.getProcess(ev.PID)
+	if err != nil {
+		return fmt.Errorf("failed to get process for clone %d: %w", ev.PID, err)
+	}
+	if record == nil {
+		record = &data.ProcessData{
+		Proc: data.Process{
+			PID:       ev.PID,
+			Name:      ev.Comm,
+			StartTime: ev.Timestamp.UTC(),
+		},
+		Threads: []data.ThreadData{},
+	}
+		return nil
+	}
+
+	ranges, err := proc.LoadSmapsRangesForThread(ev.PID, ev.TID)
+	if err != nil {
+		return fmt.Errorf("failed to load ranges for clone %d: %w", ev.PID, err)
+	}
+
+	// Update ProcessData - add new thread
+	record.AppendThread(data.ThreadData{
+		TID:    ev.TID,
+		Ranges: ranges,
+	})	
+
+	log.Printf("Clone event: PID=%d, TID=%d, CloneFlags=%d, TLS=%d, Threads=%d", ev.PID, ev.TID, ev.CloneFlags, ev.TLS, len(record.Threads))
+
+	// Save ProcessData (no Value, just structure)
+	if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
+		return fmt.Errorf("failed to upsert process: %w", err)
+	}
+
+	return nil
+}
+
 // HandleMmapEvent handles mmap events for a process
 // Only processes existing processes - does not create new ones
 func (h *DBHelper) HandleMmapEvent(ev uimsg.ProcessMmap) error {
@@ -206,8 +247,8 @@ func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
 	return nil
 }
 
-// HandleSwapEvent handles swap events for a process
-func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessInitSwapUnswap) error {
+// HandlePagingEvent handles paging events for a process
+func (h *DBHelper) HandlePagingEvent(ev uimsg.ProcessInitSwapUnswap) error {
 	// Filter swap events by error code
 	if ev.ErrorCode != constants.SwapEventSuccessCode {
 		return nil
@@ -225,10 +266,10 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessInitSwapUnswap) error {
 
 	err := h.updatePageStatus(ev.PID, ev.TID, ev.Address, status)
 	if err != nil {
-		// Provide additional context for swap events on unknown processes
+		// Provide additional context for paging events on unknown processes
 		record, _ := h.getProcess(ev.PID)
 		if record == nil {
-			h.reportError(fmt.Errorf("swap event for unknown process PID %d (process may have exited)", ev.PID))
+			h.reportError(fmt.Errorf("paging event for unknown process PID %d (process may have exited)", ev.PID))
 			return nil
 		}
 	}
@@ -250,6 +291,11 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	// Calculate page address and offset
 	pageAddr := (address / data.PageSizeBytes) * data.PageSizeBytes
 	r := record.FindRangeForAddr(tid, pageAddr)
+	if r == nil {
+		// If not found for TID, try to find for pid (in case of shared memory or brk)
+		r = record.FindRangeForAddr(pid, pageAddr)
+	}
+	
 	if r == nil {
 		// Range not found — mmap may not have been processed yet, or the range
 		// was munmapped. Silently ignore rather than error.

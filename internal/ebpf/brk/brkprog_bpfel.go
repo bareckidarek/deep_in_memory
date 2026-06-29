@@ -75,7 +75,7 @@ type BrkProgProgramSpecs struct {
 type BrkProgMapSpecs struct {
 	BrkEntries *ebpf.MapSpec `ebpf:"brk_entries"`
 	Events     *ebpf.MapSpec `ebpf:"events"`
-	TargetPid  *ebpf.MapSpec `ebpf:"target_pid"`
+	TargetPids *ebpf.MapSpec `ebpf:"target_pids"`
 }
 
 // BrkProgVariableSpecs contains global variables before they are loaded into the kernel.
@@ -107,14 +107,14 @@ func (o *BrkProgObjects) Close() error {
 type BrkProgMaps struct {
 	BrkEntries *ebpf.Map `ebpf:"brk_entries"`
 	Events     *ebpf.Map `ebpf:"events"`
-	TargetPid  *ebpf.Map `ebpf:"target_pid"`
+	TargetPids *ebpf.Map `ebpf:"target_pids"`
 }
 
 func (m *BrkProgMaps) Close() error {
 	return _BrkProgClose(
 		m.BrkEntries,
 		m.Events,
-		m.TargetPid,
+		m.TargetPids,
 	)
 }
 

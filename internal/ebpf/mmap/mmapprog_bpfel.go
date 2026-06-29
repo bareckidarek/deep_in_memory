@@ -81,7 +81,7 @@ type MmapProgMapSpecs struct {
 	Events        *ebpf.MapSpec `ebpf:"events"`
 	MmapEntries   *ebpf.MapSpec `ebpf:"mmap_entries"`
 	MunmapEntries *ebpf.MapSpec `ebpf:"munmap_entries"`
-	TargetPid     *ebpf.MapSpec `ebpf:"target_pid"`
+	TargetPids    *ebpf.MapSpec `ebpf:"target_pids"`
 }
 
 // MmapProgVariableSpecs contains global variables before they are loaded into the kernel.
@@ -114,7 +114,7 @@ type MmapProgMaps struct {
 	Events        *ebpf.Map `ebpf:"events"`
 	MmapEntries   *ebpf.Map `ebpf:"mmap_entries"`
 	MunmapEntries *ebpf.Map `ebpf:"munmap_entries"`
-	TargetPid     *ebpf.Map `ebpf:"target_pid"`
+	TargetPids    *ebpf.Map `ebpf:"target_pids"`
 }
 
 func (m *MmapProgMaps) Close() error {
@@ -122,7 +122,7 @@ func (m *MmapProgMaps) Close() error {
 		m.Events,
 		m.MmapEntries,
 		m.MunmapEntries,
-		m.TargetPid,
+		m.TargetPids,
 	)
 }
 

@@ -13,8 +13,66 @@ import (
 // LoadSmapsRanges reads /proc/PID/smaps and returns memory ranges as ThreadData.
 // All ranges are assigned to TID=PID since smaps doesn't distinguish threads.
 func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
-	smapsPath := fmt.Sprintf("/proc/%d/smaps", pid)
-	file, err := os.Open(smapsPath)
+	mainRanges, err := loadRangesFromPid(pid)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(mainRanges) == 0 {
+		return nil, nil
+	}
+
+	threads := []data.ThreadData{{
+		TID:    pid,
+		Ranges: mainRanges,
+	}}
+
+	mainRangeSet := buildRangeSet(mainRanges)
+
+	childPIDs, err := readChildrenPIDs(pid)
+	if err != nil {
+		return threads, nil
+	}
+
+	for _, childPID := range childPIDs {
+		childRanges, loadErr := loadRangesFromPid(childPID)
+		if loadErr != nil {
+			threads = append(threads, data.ThreadData{TID: childPID, Ranges: nil})
+			continue
+		}
+
+		childUniqueRanges := filterRangesNotInSet(childRanges, mainRangeSet)
+		threads = append(threads, data.ThreadData{TID: childPID, Ranges: childUniqueRanges})
+	}
+
+	return threads, nil
+}
+
+// LoadSmapsRangesForThread reads /proc/PID/task/TID/smaps and returns memory ranges for a specific thread.
+// It filters out ranges that are already present in the main process's smaps to avoid duplicates.
+func LoadSmapsRangesForThread(pid int, tid int) ([]data.AddrRange, error) {
+	ranges, err := loadRangesFromPid(tid)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+
+	mainRanges, err := loadRangesFromPid(pid)
+	if err != nil {
+		return ranges, nil
+	}
+
+	mainRangeSet := buildRangeSet(mainRanges)
+	uniqueRanges := filterRangesNotInSet(ranges, mainRangeSet)
+
+	return uniqueRanges, nil
+}
+
+func loadRangesFromPid(pid int) ([]data.AddrRange, error) {
+	file, err := os.Open(fmt.Sprintf("/proc/%d/smaps", pid))
 	if err != nil {
 		return nil, fmt.Errorf("open smaps: %w", err)
 	}
@@ -112,16 +170,64 @@ func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 		return nil, nil
 	}
 
-	// Sort ranges before returning
+	// Sort ranges before returning.
 	data.SortRanges(ranges)
+	return ranges, nil
+}
 
-	// Return all ranges under a single ThreadData with TID=PID
-	return []data.ThreadData{
-		{
-			TID:    pid,
-			Ranges: ranges,
-		},
-	}, nil
+func readChildrenPIDs(pid int) ([]int, error) {
+	childrenPath := fmt.Sprintf("/proc/%d/task/%d/children", pid, pid)
+	content, err := os.ReadFile(childrenPath)
+	if err != nil {
+		return nil, fmt.Errorf("read children: %w", err)
+	}
+
+	fields := strings.Fields(string(content))
+	if len(fields) == 0 {
+		return nil, nil
+	}
+
+	children := make([]int, 0, len(fields))
+	seen := make(map[int]struct{}, len(fields))
+	for _, field := range fields {
+		cpid, convErr := strconv.Atoi(field)
+		if convErr != nil {
+			continue
+		}
+		if cpid <= 0 {
+			continue
+		}
+		if _, exists := seen[cpid]; exists {
+			continue
+		}
+		seen[cpid] = struct{}{}
+		children = append(children, cpid)
+	}
+
+	return children, nil
+}
+
+func buildRangeSet(ranges []data.AddrRange) map[string]struct{} {
+	set := make(map[string]struct{}, len(ranges))
+	for _, r := range ranges {
+		set[rangeKey(r)] = struct{}{}
+	}
+	return set
+}
+
+func filterRangesNotInSet(ranges []data.AddrRange, rangeSet map[string]struct{}) []data.AddrRange {
+	filtered := make([]data.AddrRange, 0, len(ranges))
+	for _, r := range ranges {
+		if _, exists := rangeSet[rangeKey(r)]; exists {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+func rangeKey(r data.AddrRange) string {
+	return fmt.Sprintf("%x-%x", r.StartVal, r.EndVal)
 }
 
 // extractLabel parses the label portion of a smaps header line.

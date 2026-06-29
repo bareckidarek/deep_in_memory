@@ -71,8 +71,8 @@ type SchedProgProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type SchedProgMapSpecs struct {
-	Events    *ebpf.MapSpec `ebpf:"events"`
-	TargetPid *ebpf.MapSpec `ebpf:"target_pid"`
+	Events     *ebpf.MapSpec `ebpf:"events"`
+	TargetPids *ebpf.MapSpec `ebpf:"target_pids"`
 }
 
 // SchedProgVariableSpecs contains global variables before they are loaded into the kernel.
@@ -102,14 +102,14 @@ func (o *SchedProgObjects) Close() error {
 //
 // It can be passed to LoadSchedProgObjects or ebpf.CollectionSpec.LoadAndAssign.
 type SchedProgMaps struct {
-	Events    *ebpf.Map `ebpf:"events"`
-	TargetPid *ebpf.Map `ebpf:"target_pid"`
+	Events     *ebpf.Map `ebpf:"events"`
+	TargetPids *ebpf.Map `ebpf:"target_pids"`
 }
 
 func (m *SchedProgMaps) Close() error {
 	return _SchedProgClose(
 		m.Events,
-		m.TargetPid,
+		m.TargetPids,
 	)
 }
 

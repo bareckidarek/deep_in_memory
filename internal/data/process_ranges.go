@@ -23,6 +23,14 @@ func (pd *ProcessData) getOrCreateThread(tid int) int {
 	return len(pd.Threads) - 1
 }
 
+func (pd *ProcessData) AppendThread(thread ThreadData) {
+	if pd.Threads == nil {
+		pd.Threads = []ThreadData{}
+	}
+	pd.Threads = append(pd.Threads, thread)
+
+}
+
 // AddMmapRange records a new virtual memory allocation from an mmap syscall.
 // Creates or finds the thread's range list and adds the new address range.
 // Automatically sorts ranges after insertion for consistent ordering.
