@@ -136,39 +136,44 @@ func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 }
 
 func (h *DBHelper) HandleCloneEvent(ev uimsg.ProcessClone) error {
-		
-	record, err := h.getProcess(ev.PID)
-	if err != nil {
-		return fmt.Errorf("failed to get process for clone %d: %w", ev.PID, err)
-	}
-	if record == nil {
-		record = &data.ProcessData{
-		Proc: data.Process{
-			PID:       ev.PID,
-			Name:      ev.Comm,
-			StartTime: ev.Timestamp.UTC(),
-		},
-		Threads: []data.ThreadData{},
-	}
-		return nil
-	}
 
-	ranges, err := proc.LoadSmapsRangesForThread(ev.PID, ev.TID)
-	if err != nil {
-		return fmt.Errorf("failed to load ranges for clone %d: %w", ev.PID, err)
-	}
+	log.Printf("Clone event: PID=%d, TID=%d, CloneFlags=%d, TLS=%d", ev.PID, ev.TID, ev.CloneFlags, ev.TLS)
 
-	// Update ProcessData - add new thread
-	record.AppendThread(data.ThreadData{
-		TID:    ev.TID,
-		Ranges: ranges,
-	})	
+	if(ev.CloneFlags & 0x00010000 == 0) {  // 0x00010000 is CLONE_THREAD
+		record := &data.ProcessData{
+			Proc: data.Process{
+				PID:       ev.TID,
+				Name:      ev.Comm,
+				StartTime: ev.Timestamp.UTC(),
+			},
+			Threads: []data.ThreadData{},
+		}
+		return h.UpsertProcess(ev.TID, record)
+	} else {
 
-	log.Printf("Clone event: PID=%d, TID=%d, CloneFlags=%d, TLS=%d, Threads=%d", ev.PID, ev.TID, ev.CloneFlags, ev.TLS, len(record.Threads))
+		record, err := h.getProcess(ev.PID)
+		if err != nil {
+			return fmt.Errorf("failed to get process for clone %d: %w", ev.PID, err)
+		}
+		if record == nil {
+			return fmt.Errorf("process %d not found for clone event", ev.PID)
+		}
 
-	// Save ProcessData (no Value, just structure)
-	if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
-		return fmt.Errorf("failed to upsert process: %w", err)
+		ranges, err := proc.LoadSmapsRangesForThread(ev.PID, ev.TID)
+		if err != nil {
+			return fmt.Errorf("failed to load ranges for clone %d: %w", ev.TID, err)
+		}
+
+		// Update ProcessData - add new thread
+		record.AppendThread(data.ThreadData{
+			TID:    ev.TID,
+			Ranges: ranges,
+		})
+
+		// Save ProcessData (no Value, just structure)
+		if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
+			return fmt.Errorf("failed to upsert process: %w", err)
+		}
 	}
 
 	return nil
@@ -295,7 +300,7 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 		// If not found for TID, try to find for pid (in case of shared memory or brk)
 		r = record.FindRangeForAddr(pid, pageAddr)
 	}
-	
+
 	if r == nil {
 		// Range not found — mmap may not have been processed yet, or the range
 		// was munmapped. Silently ignore rather than error.

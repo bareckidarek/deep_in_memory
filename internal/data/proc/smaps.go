@@ -3,6 +3,7 @@ package proc
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -10,10 +11,11 @@ import (
 	"deep_in_memory/internal/data"
 )
 
+
 // LoadSmapsRanges reads /proc/PID/smaps and returns memory ranges as ThreadData.
 // All ranges are assigned to TID=PID since smaps doesn't distinguish threads.
 func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
-	mainRanges, err := loadRangesFromPid(pid)
+	mainRanges, err := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", pid))
 	if err != nil {
 		return nil, err
 	}
@@ -29,20 +31,26 @@ func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 
 	mainRangeSet := buildRangeSet(mainRanges)
 
-	childPIDs, err := readChildrenPIDs(pid)
+	taskIDs, err := readTaskIds(pid)
 	if err != nil {
 		return threads, nil
 	}
 
-	for _, childPID := range childPIDs {
-		childRanges, loadErr := loadRangesFromPid(childPID)
+	log.Printf("LoadSmapsRanges: PID=%d, found %d tasks", pid, len(taskIDs))
+
+	for _, taskID := range taskIDs {
+		log.Printf("LoadSmapsRanges: PID=%d, loading smaps for task TID=%d", pid, taskID)
+		taskRanges, loadErr := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", taskID))
 		if loadErr != nil {
-			threads = append(threads, data.ThreadData{TID: childPID, Ranges: nil})
+			threads = append(threads, data.ThreadData{TID: taskID, Ranges: nil})
 			continue
 		}
+		log.Printf("LoadSmapsRanges: PID=%d, TID=%d, found %d ranges", pid, taskID, len(taskRanges))
 
-		childUniqueRanges := filterRangesNotInSet(childRanges, mainRangeSet)
-		threads = append(threads, data.ThreadData{TID: childPID, Ranges: childUniqueRanges})
+		taskUniqueRanges := filterRangesNotInSet(taskRanges, mainRangeSet)
+
+		log.Printf("LoadSmapsRanges: PID=%d, TID=%d, %d unique ranges", pid, taskID, len(taskUniqueRanges))
+		threads = append(threads, data.ThreadData{TID: taskID, Ranges: taskUniqueRanges})
 	}
 
 	return threads, nil
@@ -51,7 +59,7 @@ func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 // LoadSmapsRangesForThread reads /proc/PID/task/TID/smaps and returns memory ranges for a specific thread.
 // It filters out ranges that are already present in the main process's smaps to avoid duplicates.
 func LoadSmapsRangesForThread(pid int, tid int) ([]data.AddrRange, error) {
-	ranges, err := loadRangesFromPid(tid)
+	ranges, err := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", tid))
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +68,7 @@ func LoadSmapsRangesForThread(pid int, tid int) ([]data.AddrRange, error) {
 		return nil, nil
 	}
 
-	mainRanges, err := loadRangesFromPid(pid)
+	mainRanges, err := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", pid))
 	if err != nil {
 		return ranges, nil
 	}
@@ -68,11 +76,13 @@ func LoadSmapsRangesForThread(pid int, tid int) ([]data.AddrRange, error) {
 	mainRangeSet := buildRangeSet(mainRanges)
 	uniqueRanges := filterRangesNotInSet(ranges, mainRangeSet)
 
+	log.Printf("LoadSmapsRangesForThread: PID=%d, TID=%d, found %d ranges, %d unique", pid, tid, len(ranges), len(uniqueRanges))
+
 	return uniqueRanges, nil
 }
 
-func loadRangesFromPid(pid int) ([]data.AddrRange, error) {
-	file, err := os.Open(fmt.Sprintf("/proc/%d/smaps", pid))
+func loadRangesFromSmapsPath(path string) ([]data.AddrRange, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open smaps: %w", err)
 	}
@@ -100,7 +110,7 @@ func loadRangesFromPid(pid int) ([]data.AddrRange, error) {
 			}
 
 			// Extract label
-			label := extractLabel(fields, line)
+			labelType, label := extractLabel(fields)
 
 			// Parse address range
 			addrRange := fields[0]
@@ -133,6 +143,7 @@ func loadRangesFromPid(pid int) ([]data.AddrRange, error) {
 				PrevSize: size / data.PageSizeBytes, // Initialize PrevSize to current size
 				Statuses: make(map[string]*data.StatusCount),
 				Label:    label,
+				LabelType: labelType,
 			}
 
 			// Initialize counters to zero
@@ -175,36 +186,26 @@ func loadRangesFromPid(pid int) ([]data.AddrRange, error) {
 	return ranges, nil
 }
 
-func readChildrenPIDs(pid int) ([]int, error) {
-	childrenPath := fmt.Sprintf("/proc/%d/task/%d/children", pid, pid)
-	content, err := os.ReadFile(childrenPath)
+func readTaskIds(pid int) ([]int, error) {
+	taskPath := fmt.Sprintf("/proc/%d/task/", pid)
+	entries, err := os.ReadDir(taskPath)
 	if err != nil {
-		return nil, fmt.Errorf("read children: %w", err)
+		return nil, fmt.Errorf("read task IDs: %w", err)
 	}
-
-	fields := strings.Fields(string(content))
-	if len(fields) == 0 {
-		return nil, nil
-	}
-
-	children := make([]int, 0, len(fields))
-	seen := make(map[int]struct{}, len(fields))
-	for _, field := range fields {
-		cpid, convErr := strconv.Atoi(field)
-		if convErr != nil {
+	
+	fields := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		tid, err := strconv.Atoi(entry.Name())
+		if err != nil {
 			continue
 		}
-		if cpid <= 0 {
+		if(tid == pid) { // Exclude the main thread (PID)
 			continue
 		}
-		if _, exists := seen[cpid]; exists {
-			continue
-		}
-		seen[cpid] = struct{}{}
-		children = append(children, cpid)
+		fields = append(fields, tid)
 	}
 
-	return children, nil
+	return fields, nil
 }
 
 func buildRangeSet(ranges []data.AddrRange) map[string]struct{} {
@@ -232,33 +233,33 @@ func rangeKey(r data.AddrRange) string {
 
 // extractLabel parses the label portion of a smaps header line.
 // Returns the label string (e.g. "[heap]", "/usr/lib/...", or "" for anonymous memory).
-func extractLabel(fields []string, line string) string {
+func extractLabel(fields []string) (data.LabelType, string) {
 	if len(fields) < 6 {
-		return ""
+		return data.Empty, ""
 	}
+	extractedLabel := strings.TrimSpace(fields[5])
 
-	// Reconstruct everything after the 5th field (inode/device).
-	parts := strings.SplitN(line, " ", 6)
-	if len(parts) < 6 {
-		return ""
-	}
-	remainder := strings.TrimSpace(parts[5])
+	log.Printf("extractLabel: remainder='%s'", extractedLabel)
 
 	switch {
-	case remainder == "":
-		return ""
-	case strings.HasPrefix(remainder, "["):
-		return remainder // e.g. [heap], [stack], [anon: Go: gc bits]
-	case strings.Contains(remainder, "anon"):
-		return remainder // e.g. anon_inode:bpf-map
-	case strings.HasPrefix(remainder, "/"):
-		return remainder // file-backed mapping
+	case extractedLabel == "":
+		return data.Empty, ""
+	case strings.Contains(extractedLabel, "[heap]"):
+		return data.Heap, extractedLabel
+	case strings.Contains(extractedLabel, "[stack]"):
+		return data.Stack, extractedLabel
+	case strings.HasPrefix(extractedLabel, "["):
+		return data.Other, extractedLabel
+	case strings.Contains(extractedLabel, "anon"):
+		return data.Anonymous, extractedLabel
+	case strings.HasPrefix(extractedLabel, "/"):
+		return data.FileBacked, extractedLabel
 	default:
 		// Check if it's just a number (inode) — treat as anonymous
-		if _, err := strconv.ParseUint(remainder, 10, 64); err == nil {
-			return ""
+		if _, err := strconv.ParseUint(extractedLabel, 10, 64); err == nil {
+			return data.Anonymous, extractedLabel
 		}
-		return remainder
+		return data.Other, extractedLabel
 	}
 }
 

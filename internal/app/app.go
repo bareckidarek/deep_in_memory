@@ -25,7 +25,7 @@ type Model struct {
 	asyncWriter     *AsyncDBWriter // ALL DB writes go through this
 	refreshInterval time.Duration
 	logAggregator   *LogAggregator
-	targetPIDs       []int // Currently monitored PIDs
+	targetPIDs      []int // Currently monitored PIDs
 }
 
 // New creates the main application model that coordinates UI, database, and eBPF collectors.
@@ -39,7 +39,7 @@ func New(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.AddressData]
 		asyncWriter:     NewAsyncDBWriter(dbHelper, nil), // errCallback set via SetErrorCallback
 		refreshInterval: refresh,
 		logAggregator:   NewLogAggregator(),
-		targetPIDs:       []int{},
+		targetPIDs:      []int{},
 	}
 	return m
 }
@@ -155,7 +155,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.HandleProcessExec(v)
 		})
 		return m, nil
-		
+
 	case uimsg.ProcessExit:
 		// EnqueueExit marks PID as dead FIRST, then queues deletion.
 		// All future events for this PID are rejected by Enqueue().
@@ -173,7 +173,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case uimsg.ProcessClone:
 		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleCloneEvent(v) }, "clone", 0, v.TID)
-	
+
 	case uimsg.ProcessMmap:
 		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMmapEvent(v) }, "mmap", v.Addr, v.TID)
 

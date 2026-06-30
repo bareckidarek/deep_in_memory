@@ -52,6 +52,9 @@ type Model struct {
 	// Logs display
 	logsWrap bool // Whether log lines are word-wrapped
 
+	// Label type filtering
+	showAllLabelTypes bool // When false (default), only Heap and Empty ranges are shown
+
 	// Performance optimizations - cache styles and viewport content
 	virtualStyle        lipgloss.Style // Cached style for virtual memory box
 	physicalStyle       lipgloss.Style // Cached style for physical memory box

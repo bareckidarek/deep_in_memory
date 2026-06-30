@@ -105,7 +105,6 @@ var (
 	LightRedColor   = "#ff5f5f" // page-out (SWAP) highlight
 	LightBlueColor  = "#5f87ff" // page-in (UNSWAP) highlight
 
-
 	// UI colors
 	SelectedColor    = lipgloss.Color("10")  // Green for selected process
 	FocusColor       = lipgloss.Color("12")  // Blue for cursor focus

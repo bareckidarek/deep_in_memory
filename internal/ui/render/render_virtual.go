@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
+
+	"charm.land/lipgloss/v2"
 )
 
 // RenderVirtualEmptyContent returns the virtual memory section text shown when no process is selected.
@@ -84,14 +85,15 @@ func RenderSummary(proc data.Process, pd *data.ProcessData) string {
 }
 
 // RenderVirtualSectionContent builds the virtual memory section text.
-func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int, page int, viewportWidth int) string {
+// When showAll is false, only Heap and Empty ranges are rendered.
+func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int, page int, viewportWidth int, showAll bool) string {
 	legend := buildColorLegend()
 	return renderSectionWithLegend(
 		"[virtual memory]",
 		legend,
 		viewportWidth,
 		summary,
-		renderThreadRanges(pd.Threads, barWidth, page),
+		renderThreadRanges(pd.Threads, barWidth, page, showAll),
 	)
 }
 
@@ -133,7 +135,36 @@ func buildColorLegend() string {
 		unswapBox, constants.StatusPageIn)
 }
 
-func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) string {
+// defaultLabelTypes are the label types shown when filter is active.
+var defaultLabelTypes = map[data.LabelType]bool{
+	data.Heap:  true,
+	data.Empty: true,
+}
+
+// filterThreadRanges returns a copy of threads with ranges filtered to the given label types.
+// When showAll is true, no filtering is applied.
+func filterThreadRanges(threads []data.ThreadData, showAll bool) []data.ThreadData {
+	if showAll {
+		return threads
+	}
+	result := make([]data.ThreadData, 0, len(threads))
+	for _, th := range threads {
+		var filtered []data.AddrRange
+		for _, r := range th.Ranges {
+			if defaultLabelTypes[r.LabelType] {
+				filtered = append(filtered, r)
+			}
+		}
+		if len(filtered) > 0 {
+			result = append(result, data.ThreadData{TID: th.TID, Ranges: filtered})
+		}
+	}
+	return result
+}
+
+func renderThreadRanges(threads []data.ThreadData, barWidth int, page int, showAll bool) string {
+	threads = filterThreadRanges(threads, showAll)
+
 	if len(threads) == 0 {
 		return "Virtual ranges: none"
 	}
@@ -164,8 +195,14 @@ func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) strin
 
 	totalPages := (totalRanges + rangesPerPage - 1) / rangesPerPage
 
+	filterLabel := "[heap+empty]"
+	if showAll {
+		filterLabel = "[all]"
+	}
+
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Virtual ranges (by thread) - Page %d/%d (showing %d-%d of %d) [use p/n to navigate]:\n",
+	b.WriteString(fmt.Sprintf("Filter: %s  [press f to toggle filter]\n", filterLabel))
+	b.WriteString(fmt.Sprintf("Virtual ranges (by thread) - Page %d/%d (showing %d-%d of %d) [use p/n to navigate]\n",
 		page+1, totalPages, startIdx+1, endIdx, totalRanges))
 
 	// Flatten ranges with their thread context
@@ -195,10 +232,6 @@ func renderThreadRanges(threads []data.ThreadData, barWidth int, page int) strin
 	currentThread := -1
 	for i, item := range pageRanges {
 		if item.threadID != currentThread {
-			// New thread header
-			if i > 0 {
-				b.WriteString("\n")
-			}
 
 			// Determine if this is the last thread: check if it's the last range overall or last on page
 			isLastThreadOverall := endIdx >= totalRanges && i == len(pageRanges)-1
@@ -359,7 +392,6 @@ func buildGrowthArrow(growth int64) string {
 	}
 	return arrow
 }
-
 
 // truncateOverlayText ensures overlay text fits within the bar width
 func truncateOverlayText(overlayText string, maxWidth int) string {

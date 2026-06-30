@@ -20,7 +20,7 @@ import (
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // Requires the SharedState from the sched module to filter events.
 func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sharedState *ebpfshared.SharedState) (func() error, error) {
-		
+
 	var objs CloneProgObjects
 	spec, err := LoadCloneProg()
 	if err != nil {
@@ -68,12 +68,12 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 	processor := func(e CloneProgCloneEvent) tea.Msg {
 		ts := time.Unix(0, int64(e.Ts))
 		return uimsg.ProcessClone{
-			Timestamp: ts,
-			PID:       int(e.Pid),
-			TID:       int(e.Tid),
+			Timestamp:  ts,
+			PID:        int(e.Pid),
+			TID:        int(e.Tid),
 			CloneFlags: e.CloneFlags,
-			TLS:       e.Tls,
-			Comm:      cString(e.Comm[:]),
+			TLS:        e.Tls,
+			Comm:       cString(e.Comm[:]),
 		}
 	}
 

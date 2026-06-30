@@ -84,7 +84,7 @@ int handle_clone_exit(struct trace_event_raw_sys_exit *ctx) {
     
     entry->tid = (__u64)ctx->ret;
 
-    bpf_map_update_elem(&target_pids, &entry->tid, &value, BPF_ANY); // Add new thread to target_pids
+    //bpf_map_update_elem(&target_pids, &entry->tid, &value, BPF_ANY); // Add new thread to target_pids
     
     // Submit all clone events (both successful and failed)
     submit_event(entry);

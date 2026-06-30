@@ -49,6 +49,7 @@ func (pd *ProcessData) AddMmapRange(tid int, addr uint64, length uint64) {
 		PrevSize:  length / PageSizeBytes, // Equal to Size: no arrow on initial creation
 		Statuses:  make(map[string]*StatusCount),
 		ChangedAt: time.Now(), // Highlight new ranges
+		LabelType: Empty,
 	}
 
 	pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
@@ -87,6 +88,7 @@ func (pd *ProcessData) ExtendBrkRange(tid int, brk uint64, ret uint64) {
 				Size:     0,
 				Statuses: make(map[string]*StatusCount),
 				Label:    "[heap]",
+				LabelType: Heap,
 			}
 			pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
 			// Sort ranges after adding heap

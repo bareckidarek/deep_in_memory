@@ -124,5 +124,12 @@ func (m *Model) keyHandlers() map[string]func() (tea.Model, tea.Cmd) {
 			m.dirty = true
 			return m, func() tea.Msg { return uimsg.GetLogsMsg{} }
 		},
+		"f": func() (tea.Model, tea.Cmd) {
+			// Toggle label type filter (Heap+Empty only vs. all)
+			m.showAllLabelTypes = !m.showAllLabelTypes
+			m.syncLayout()
+			m.dirty = true
+			return m, nil
+		},
 	}
 }
