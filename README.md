@@ -1,6 +1,6 @@
 # deep_in_memory
 
-A Linux terminal UI for real-time tracing and visualization of memory operations — `brk`, `mmap` / `munmap`, page faults, and swap — for a selected process.
+A Linux terminal UI for real-time tracing and visualization of process lifecycle and memory operations — `clone`, `brk`, `mmap` / `munmap`, page faults, and swap — for a selected process.
 
 Built with eBPF for zero-overhead kernel tracing and a Bubble Tea TUI for interactive exploration.
 
@@ -10,9 +10,14 @@ Built with eBPF for zero-overhead kernel tracing and a Bubble Tea TUI for intera
 
 `deep_in_memory` attaches eBPF probes to key kernel functions and syscalls, captures every memory event for a target process, and presents the data in a live terminal dashboard:
 
-- **Virtual memory panel** — every `mmap`/`munmap` and `brk` range, paginated, with per-range status bars showing reservation vs. allocation vs. swap
+- **Virtual memory panel** — every `mmap`/`munmap` and `brk` range, paginated, with per-range status bars showing reservation vs. allocation vs. swap; by default it shows only `Heap` and unlabeled (`Empty`) ranges, with a toggle to reveal all `LabelType` values
 - **Physical memory panel** — look up any virtual address to get its page frame number (PFN) and cross-reference it against `/proc/iomem` hardware ranges
-- **Log panel** — aggregated event stream with counts and address ranges per event type
+- **Log panel** — aggregated event stream with counts and address ranges per event type, including process/thread cloning
+
+When the selected process creates additional tasks or subprocesses through `clone(2)`, the app distinguishes them:
+
+- `CLONE_THREAD` updates the selected process with an additional task/thread snapshot loaded from `/proc/PID/task/TID/smaps`
+- clone without `CLONE_THREAD` creates a separate child process entry in the process list
 
 ---
 
@@ -29,6 +34,7 @@ Built with eBPF for zero-overhead kernel tracing and a Bubble Tea TUI for intera
 |-------------|-----------|-----------------|
 | `sched_process_exec` tracepoint | `ProcessExec` | New process started |
 | `sched_process_exit` tracepoint | `ProcessExit` | Process exited |
+| `sys_[enter/exit]_clone` tracepoints | `ProcessClone` | Thread/task creation or child process creation |
 | `sys_[enter/exit]_mmap` tracepoints | `ProcessMmap` | `mmap` syscall — new virtual range |
 | `sys_[enter/exit]_munmap` tracepoints | `ProcessMunmap` | `munmap` syscall — range freed |
 | `sys_[enter/exit]_brk` tracepoints | `ProcessBrk` | `brk` syscall — heap grow/shrink |
@@ -106,15 +112,19 @@ Files created in the working directory:
 | `Tab` | Focus physical memory address input |
 | `Enter` (in input) | Look up page frame number for address |
 | `↑` / `↓` (in input) | Navigate address suggestions |
+| `j` / `k` | Scroll `/proc/iomem` matches in the physical memory panel |
 | `w` | Toggle word-wrap in logs panel |
+| `f` | Toggle virtual-range filter: `Heap` + `Empty` only / all `LabelType` values |
 | `q` / `Ctrl+C` | Quit |
+
+The virtual memory panel shows a filter legend in-place: `Filter: [heap+empty]` by default, `Filter: [all]` after pressing `f`.
 
 ---
 
 ## Architecture
 
 ```
-eBPF collectors (sched / mmap / brk / paging)
+eBPF collectors (sched / clone / mmap / brk / paging)
         │  emit TimestampedEvent
         ▼
 CentralEventCollector      ← batches events, sorts by timestamp
@@ -134,6 +144,10 @@ AsyncDBWriter              ← single goroutine, all BoltDB writes
 Events from multiple collectors are interleaved in real time. `CentralEventCollector` buffers them and
 flushes sorted batches to the Bubble Tea program, ensuring `do_anonymous_page` events are always processed
 after their parent `mmap` event regardless of which goroutine wins the race.
+
+Traced events are gated by the currently selected PID: `clone`, `mmap`, `brk`, and paging activity are only
+persisted and shown for the selected process, while broad lifecycle events like `exec`/`exit` continue to feed
+the process list.
 
 ---
 

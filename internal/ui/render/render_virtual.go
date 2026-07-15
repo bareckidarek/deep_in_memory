@@ -86,15 +86,35 @@ func RenderSummary(proc data.Process, pd *data.ProcessData) string {
 
 // RenderVirtualSectionContent builds the virtual memory section text.
 // When showAll is false, only Heap and Empty ranges are rendered.
-func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int, page int, viewportWidth int, showAll bool) string {
+// It returns rendered content and the normalized page index.
+func RenderVirtualSectionContent(summary string, pd *data.ProcessData, barWidth int, page int, viewportWidth int, viewportHeight int, showAll bool) (string, int) {
 	legend := buildColorLegend()
+	rangesPerPage := calcVirtualRowsPerPage(viewportHeight, summary)
+	rangesContent, normalizedPage := renderThreadRanges(pd.Proc.PID, pd.Threads, barWidth, page, rangesPerPage, showAll)
+
 	return renderSectionWithLegend(
 		"[virtual memory]",
 		legend,
 		viewportWidth,
 		summary,
-		renderThreadRanges(pd.Threads, barWidth, page, showAll),
-	)
+		rangesContent,
+	), normalizedPage
+}
+
+func calcVirtualRowsPerPage(viewportHeight int, summary string) int {
+	summaryHeight := lipgloss.Height(strings.TrimRight(summary, "\n"))
+	if summaryHeight < 0 {
+		summaryHeight = 0
+	}
+
+	// Fixed lines in the virtual pane:
+	// title + empty line + summary + filter line + paging line + one reserved footer line.
+	fixedLines := 1 + 1 + summaryHeight + 1 + 1 + 1
+	rowsPerPage := viewportHeight - fixedLines
+	if rowsPerPage < 1 {
+		return 1
+	}
+	return rowsPerPage
 }
 
 func renderSectionWithLegend(title string, legend string, viewportWidth int, parts ...string) string {
@@ -162,38 +182,64 @@ func filterThreadRanges(threads []data.ThreadData, showAll bool) []data.ThreadDa
 	return result
 }
 
-func renderThreadRanges(threads []data.ThreadData, barWidth int, page int, showAll bool) string {
+func renderThreadRanges(procPID int, threads []data.ThreadData, barWidth int, page int, rangesPerPage int, showAll bool) (string, int) {
 	threads = filterThreadRanges(threads, showAll)
 
 	if len(threads) == 0 {
-		return "Virtual ranges: none"
+		return "Virtual ranges: none", 0
 	}
 
-	const rangesPerPage = constants.RangesPerPage
+	type displayRow struct {
+		isHeader bool
+		threadID int
+		rangeVal data.AddrRange
+	}
 
-	// Count total ranges across all threads
-	totalRanges := 0
+	var rows []displayRow
 	for _, th := range threads {
-		totalRanges += len(th.Ranges)
+		if len(th.Ranges) == 0 {
+			continue
+		}
+
+		rows = append(rows, displayRow{
+			isHeader: true,
+			threadID: th.TID,
+		})
+
+		for _, r := range th.Ranges {
+			rows = append(rows, displayRow{
+				isHeader: false,
+				threadID: th.TID,
+				rangeVal: r,
+			})
+		}
 	}
 
-	if totalRanges == 0 {
-		return "Virtual ranges: none"
+	totalRows := len(rows)
+	if totalRows == 0 {
+		return "Virtual ranges: none", 0
+	}
+
+	if rangesPerPage < 1 {
+		rangesPerPage = 1
+	}
+	if page < 0 {
+		page = 0
 	}
 
 	// Calculate pagination
 	startIdx := page * rangesPerPage
-	if startIdx >= totalRanges {
+	if startIdx >= totalRows {
 		// If page is out of bounds, show last page
-		page = (totalRanges - 1) / rangesPerPage
+		page = (totalRows - 1) / rangesPerPage
 		startIdx = page * rangesPerPage
 	}
 	endIdx := startIdx + rangesPerPage
-	if endIdx > totalRanges {
-		endIdx = totalRanges
+	if endIdx > totalRows {
+		endIdx = totalRows
 	}
 
-	totalPages := (totalRanges + rangesPerPage - 1) / rangesPerPage
+	totalPages := (totalRows + rangesPerPage - 1) / rangesPerPage
 
 	filterLabel := "[heap+empty]"
 	if showAll {
@@ -203,87 +249,21 @@ func renderThreadRanges(threads []data.ThreadData, barWidth int, page int, showA
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Filter: %s  [press f to toggle filter]\n", filterLabel))
 	b.WriteString(fmt.Sprintf("Virtual ranges (by thread) - Page %d/%d (showing %d-%d of %d) [use p/n to navigate]\n",
-		page+1, totalPages, startIdx+1, endIdx, totalRanges))
+		page+1, totalPages, startIdx+1, endIdx, totalRows))
 
-	// Flatten ranges with their thread context
-	type rangeWithThread struct {
-		threadIdx int
-		threadID  int
-		rangeIdx  int
-		range_    data.AddrRange
+	pageRows := rows[startIdx:endIdx]
+	for _, row := range pageRows {
+		if row.isHeader {
+			b.WriteString(fmt.Sprintf("PID: %d, TID: %d\n", procPID, row.threadID))
+			continue
+		}
+
+		highlighted := !row.rangeVal.ChangedAt.IsZero() && time.Since(row.rangeVal.ChangedAt) < constants.RangeHighlightDuration
+		bar := renderRangeBar(row.rangeVal, barWidth, highlighted)
+		b.WriteString(fmt.Sprintf("  %s\n", bar))
 	}
 
-	var allRanges []rangeWithThread
-	for tIdx, th := range threads {
-		for rIdx, r := range th.Ranges {
-			allRanges = append(allRanges, rangeWithThread{
-				threadIdx: tIdx,
-				threadID:  th.TID,
-				rangeIdx:  rIdx,
-				range_:    r,
-			})
-		}
-	}
-
-	// Extract page slice
-	pageRanges := allRanges[startIdx:endIdx]
-
-	// Group by thread for rendering
-	currentThread := -1
-	for i, item := range pageRanges {
-		if item.threadID != currentThread {
-
-			// Determine if this is the last thread: check if it's the last range overall or last on page
-			isLastThreadOverall := endIdx >= totalRanges && i == len(pageRanges)-1
-
-			// Check if there are more threads after this one in the page
-			hasMoreThreadsInPage := false
-			for j := i + 1; j < len(pageRanges); j++ {
-				if pageRanges[j].threadID != item.threadID {
-					hasMoreThreadsInPage = true
-					break
-				}
-			}
-
-			connector := "├─"
-			if isLastThreadOverall || (!hasMoreThreadsInPage && endIdx >= totalRanges) {
-				connector = "└─"
-			}
-
-			b.WriteString(fmt.Sprintf("%s %d\n", connector, item.threadID))
-			currentThread = item.threadID
-		}
-
-		// Render range
-		// Determine prefix based on whether thread connector was └─ or ├─
-		isLastThreadOverall := endIdx >= totalRanges && currentThread == item.threadID
-		hasMoreThreadsAfter := false
-		for j := i + 1; j < len(pageRanges); j++ {
-			if pageRanges[j].threadID != currentThread {
-				hasMoreThreadsAfter = true
-				break
-			}
-		}
-
-		prefix := "│  "
-		if (isLastThreadOverall && !hasMoreThreadsAfter) || (endIdx >= totalRanges && !hasMoreThreadsAfter) {
-			prefix = "   "
-		}
-
-		// Check if this is the last range in current thread on this page
-		isLastInThread := (i == len(pageRanges)-1) || (i < len(pageRanges)-1 && pageRanges[i+1].threadID != item.threadID)
-
-		rangeConn := "├─"
-		if isLastInThread {
-			rangeConn = "└─"
-		}
-
-		highlighted := !item.range_.ChangedAt.IsZero() && time.Since(item.range_.ChangedAt) < constants.RangeHighlightDuration
-		bar := renderRangeBar(item.range_, barWidth, highlighted)
-		b.WriteString(fmt.Sprintf("%s%s %s\n", prefix, rangeConn, bar))
-	}
-
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(b.String(), "\n"), page
 }
 
 // segment represents a colored segment of the memory bar

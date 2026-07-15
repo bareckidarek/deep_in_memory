@@ -237,7 +237,7 @@ func extractLabel(fields []string) (data.LabelType, string) {
 	if len(fields) < 6 {
 		return data.Empty, ""
 	}
-	extractedLabel := strings.TrimSpace(fields[5])
+	extractedLabel := strings.TrimSpace(strings.Join(fields[5:], " "))
 
 	log.Printf("extractLabel: remainder='%s'", extractedLabel)
 
@@ -248,10 +248,10 @@ func extractLabel(fields []string) (data.LabelType, string) {
 		return data.Heap, extractedLabel
 	case strings.Contains(extractedLabel, "[stack]"):
 		return data.Stack, extractedLabel
-	case strings.HasPrefix(extractedLabel, "["):
-		return data.Other, extractedLabel
 	case strings.Contains(extractedLabel, "anon"):
 		return data.Anonymous, extractedLabel
+	case strings.HasPrefix(extractedLabel, "["):
+		return data.Other, extractedLabel
 	case strings.HasPrefix(extractedLabel, "/"):
 		return data.FileBacked, extractedLabel
 	default:

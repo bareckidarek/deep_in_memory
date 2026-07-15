@@ -186,7 +186,9 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	m.applyViewportDimensions(d)
 
 	summary := uirender.RenderSummary(pd.Proc, pd)
-	m.viewportVirtual.SetContent(uirender.RenderVirtualSectionContent(summary, pd, d.barWidth, m.rangesPage, d.virtualWidth, m.showAllLabelTypes))
+	virtualContent, normalizedPage := uirender.RenderVirtualSectionContent(summary, pd, d.barWidth, m.rangesPage, d.virtualWidth, d.virtualHeight, m.showAllLabelTypes)
+	m.rangesPage = normalizedPage
+	m.viewportVirtual.SetContent(virtualContent)
 	m.viewportPhysical.SetContent(uirender.RenderPhysicalSectionContent(m.buildPhysicalMemoryState(d.physicalWidth, d.physicalHeight)))
 	// Logs content is updated via GetLogsMsg timer
 
