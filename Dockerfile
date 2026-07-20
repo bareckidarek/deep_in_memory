@@ -1,4 +1,4 @@
-FROM golang:1.26.4 AS build
+FROM golang:1.26.5 AS build
 
 RUN apt-get update && \
     apt-get install -y bpftool clang llvm libbpf-dev && \

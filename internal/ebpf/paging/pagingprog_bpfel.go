@@ -25,6 +25,23 @@ type PagingProgPagingEvent struct {
 	Comm [16]int8
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	PagingProgMapAnonymousEntries          = "anonymous_entries"
+	PagingProgMapEvents                    = "events"
+	PagingProgMapSwapEntries               = "swap_entries"
+	PagingProgMapSwapWritepageEntries      = "swap_writepage_entries"
+	PagingProgMapTargetPids                = "target_pids"
+	PagingProgProgKprobeDoAnonymousPage    = "kprobe_do_anonymous_page"
+	PagingProgProgKprobeDoSwapPage         = "kprobe_do_swap_page"
+	PagingProgProgKprobeSwapWritepage      = "kprobe_swap_writepage"
+	PagingProgProgKretprobeDoAnonymousPage = "kretprobe_do_anonymous_page"
+	PagingProgProgKretprobeDoSwapPage      = "kretprobe_do_swap_page"
+	PagingProgProgKretprobeSwapWritepage   = "kretprobe_swap_writepage"
+)
+
 // LoadPagingProg returns the embedded CollectionSpec for PagingProg.
 func LoadPagingProg() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_PagingProgBytes)
@@ -45,7 +62,7 @@ func LoadPagingProg() (*ebpf.CollectionSpec, error) {
 //	*PagingProgMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func LoadPagingProgObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func LoadPagingProgObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := LoadPagingProg()
 	if err != nil {
 		return err
@@ -83,7 +100,7 @@ type PagingProgMapSpecs struct {
 	Events               *ebpf.MapSpec `ebpf:"events"`
 	SwapEntries          *ebpf.MapSpec `ebpf:"swap_entries"`
 	SwapWritepageEntries *ebpf.MapSpec `ebpf:"swap_writepage_entries"`
-	TargetPid            *ebpf.MapSpec `ebpf:"target_pid"`
+	TargetPids           *ebpf.MapSpec `ebpf:"target_pids"`
 }
 
 // PagingProgVariableSpecs contains global variables before they are loaded into the kernel.
@@ -116,7 +133,7 @@ type PagingProgMaps struct {
 	Events               *ebpf.Map `ebpf:"events"`
 	SwapEntries          *ebpf.Map `ebpf:"swap_entries"`
 	SwapWritepageEntries *ebpf.Map `ebpf:"swap_writepage_entries"`
-	TargetPid            *ebpf.Map `ebpf:"target_pid"`
+	TargetPids           *ebpf.Map `ebpf:"target_pids"`
 }
 
 func (m *PagingProgMaps) Close() error {
@@ -125,7 +142,7 @@ func (m *PagingProgMaps) Close() error {
 		m.Events,
 		m.SwapEntries,
 		m.SwapWritepageEntries,
-		m.TargetPid,
+		m.TargetPids,
 	)
 }
 

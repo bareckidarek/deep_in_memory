@@ -24,11 +24,11 @@ struct {
 } events SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 128);
     __type(key, __u32);
-    __type(value, __u32);
-} target_pid SEC(".maps");
+    __type(value, __u8);
+} target_pids SEC(".maps");
 
 const volatile struct mmap_event *unused_event __attribute__((unused));
 
@@ -61,15 +61,15 @@ SEC("tracepoint/syscalls/sys_enter_mmap")
 int handle_mmap_enter(struct trace_event_raw_sys_enter *ctx) {
     __u64 key = bpf_get_current_pid_tgid();
     __u32 pid = key >> 32;
+    __u32 tid = (__u32)key;
+
+    //bpf_printk("handle_mmap_enter: pid=%d, tid=%d, addr=%p, len=%llu\n", pid, tid, (void *)ctx->args[0], ctx->args[1]);
     
-    // Check target_pid filter - skip if no target set
+    // Check target_pids filter - skip if no target set
     __u32 map_key = 0;
-    __u32 *target = bpf_map_lookup_elem(&target_pid, &map_key);
-    if (!target || *target == 0) {
-        return 0; // No target set, skip
-    }
-    if (pid != *target) {
-        return 0; // Not the target PID
+    __u8 *exists = bpf_map_lookup_elem(&target_pids, &pid);
+    if (!exists) {
+        return 0;
     }
     
     struct mmap_event e = {};
@@ -110,14 +110,10 @@ int handle_munmap_enter(struct trace_event_raw_sys_enter *ctx) {
     __u64 key = bpf_get_current_pid_tgid();
     __u32 pid = key >> 32;
     
-    // Check target_pid filter - skip if no target set
-    __u32 map_key = 0;
-    __u32 *target = bpf_map_lookup_elem(&target_pid, &map_key);
-    if (!target || *target == 0) {
+    // Check target_pids filter - skip if no target set
+    __u8 *exists = bpf_map_lookup_elem(&target_pids, &pid);
+    if (!exists) {
         return 0; // No target set, skip
-    }
-    if (pid != *target) {
-        return 0; // Not the target PID
     }
     
     struct mmap_event e = {};

@@ -9,6 +9,7 @@ import (
 
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
+	"deep_in_memory/internal/data/proc"
 	storedb "deep_in_memory/internal/thirdparty/db"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
@@ -133,6 +134,48 @@ func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 	return nil
 }
 
+func (h *DBHelper) HandleCloneEvent(ev uimsg.ProcessClone) error {
+
+	if ev.CloneFlags&0x00010000 == 0 { // if CLONE_THREAD (0x00010000) is not set, this is a new process, not a thread
+		record := &data.ProcessData{
+			Proc: data.Process{
+				PID:       ev.TID,
+				Name:      ev.Comm,
+				StartTime: ev.Timestamp.UTC(),
+			},
+			Threads: []data.ThreadData{},
+		}
+		return h.UpsertProcess(ev.TID, record)
+	} else {
+
+		record, err := h.getProcess(ev.PID)
+		if err != nil {
+			return fmt.Errorf("failed to get process for clone %d: %w", ev.PID, err)
+		}
+		if record == nil {
+			return fmt.Errorf("process %d not found for clone event", ev.PID)
+		}
+
+		ranges, err := proc.LoadSmapsRangesForThread(ev.PID, ev.TID)
+		if err != nil {
+			return fmt.Errorf("failed to load ranges for clone %d: %w", ev.TID, err)
+		}
+
+		// Update ProcessData - add new thread
+		record.AppendThread(data.ThreadData{
+			TID:    ev.TID,
+			Ranges: ranges,
+		})
+
+		// Save ProcessData (no Value, just structure)
+		if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
+			return fmt.Errorf("failed to upsert process: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // HandleMmapEvent handles mmap events for a process
 // Only processes existing processes - does not create new ones
 func (h *DBHelper) HandleMmapEvent(ev uimsg.ProcessMmap) error {
@@ -170,7 +213,7 @@ func (h *DBHelper) HandleBrkEvent(ev uimsg.ProcessBrk) error {
 	}
 
 	// Update ProcessData - extend brk range
-	record.ExtendBrkRange(ev.TID, ev.Brk, ev.Ret)
+	record.ExtendBrkRange(ev.PID, ev.Brk, ev.Ret)
 
 	// Save ProcessData (no Value, just structure)
 	if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
@@ -206,8 +249,8 @@ func (h *DBHelper) HandleMunmapEvent(ev uimsg.ProcessMunmap) error {
 	return nil
 }
 
-// HandleSwapEvent handles swap events for a process
-func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessInitSwapUnswap) error {
+// HandlePagingEvent handles paging events for a process
+func (h *DBHelper) HandlePagingEvent(ev uimsg.ProcessInitSwapUnswap) error {
 	// Filter swap events by error code
 	if ev.ErrorCode != constants.SwapEventSuccessCode {
 		return nil
@@ -225,10 +268,10 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessInitSwapUnswap) error {
 
 	err := h.updatePageStatus(ev.PID, ev.TID, ev.Address, status)
 	if err != nil {
-		// Provide additional context for swap events on unknown processes
+		// Provide additional context for paging events on unknown processes
 		record, _ := h.getProcess(ev.PID)
 		if record == nil {
-			h.reportError(fmt.Errorf("swap event for unknown process PID %d (process may have exited)", ev.PID))
+			h.reportError(fmt.Errorf("paging event for unknown process PID %d (process may have exited)", ev.PID))
 			return nil
 		}
 	}
@@ -238,7 +281,11 @@ func (h *DBHelper) HandleSwapEvent(ev uimsg.ProcessInitSwapUnswap) error {
 // updatePageStatus handles the shared logic for page fault and swap events:
 // finds the process and range, updates the address database, syncs counts, and saves.
 func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	record, err := h.getProcess(pid)
+
 	if err != nil {
 		return fmt.Errorf("failed to get process %d: %w", pid, err)
 	}
@@ -250,6 +297,12 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	// Calculate page address and offset
 	pageAddr := (address / data.PageSizeBytes) * data.PageSizeBytes
 	r := record.FindRangeForAddr(tid, pageAddr)
+
+	if r == nil {
+		// If not found for TID, try to find for pid (in case of shared memory or brk)
+		r = record.FindRangeForAddr(pid, pageAddr)
+	}
+
 	if r == nil {
 		// Range not found — mmap may not have been processed yet, or the range
 		// was munmapped. Silently ignore rather than error.
@@ -270,7 +323,7 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	}
 
 	// --- UPDATE MAIN DATABASE ---
-	counts := addrData.GetStatusCounts(tid, r.StartVal)
+	counts := addrData.GetStatusCounts(0, r.StartVal) // Get counts for all threads for this range
 	if r.Statuses == nil {
 		r.Statuses = make(map[string]*data.StatusCount)
 	}

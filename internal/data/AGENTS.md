@@ -13,7 +13,7 @@ implements cached address lookup, and assembles `Dataset` objects for the UI.
 
 | File | Responsibility |
 |------|----------------|
-| `types.go` | Core data types: `ProcessData`, `Process`, `ThreadData`, `AddrRange`, `StatusCount`, `AddressData` |
+| `types.go` | Core data types: `ProcessData`, `Process`, `ThreadData`, `AddrRange`, `LabelType`, `StatusCount`, `AddressData` |
 | `dataset.go` | `BuildDataset` — assembles and sorts `Dataset` from a flat slice of `ProcessData` |
 | `process_ranges.go` | Range mutation: `AddMmapRange`, `ExtendBrkRange`, `RemoveMmapRange` |
 | `range_cache.go` | `RangeCache` — binary-search cache for fast `FindRangeForAddr` lookups |
@@ -44,6 +44,20 @@ implements cached address lookup, and assembles `Dataset` objects for the UI.
 | `"INIT"` | Page anonymously faulted in (`do_anonymous_page`) |
 | `"SWAP"` | Page written to swap (`swap_writepage`) |
 | `"UNSWAP"` | Page read back from swap (`do_swap_page`) |
+
+### LabelType classification on ranges
+
+`AddrRange` stores both the raw `Label` string and a normalized `LabelType` enum.
+
+Current `LabelType` values are:
+- `FileBacked`
+- `Heap`
+- `Anonymous`
+- `Stack`
+- `Empty`
+- `Other`
+
+The UI's default virtual-memory filter shows only `Heap` and `Empty` ranges. Live mmap-created ranges are initialized with `LabelType=Empty`; heap ranges created by `brk` use `LabelType=Heap`.
 
 ---
 
@@ -103,13 +117,24 @@ Creates `Dataset{Processes map[int]*ProcessData, Order []int}`. Sorts `Order` by
 ### LoadSmapsRanges(pid int) ([]ThreadData, error)
 
 Reads `/proc/PID/smaps`. All ranges are assigned `TID = PID` (smaps has no thread granularity).
-Extracts hex address range, label (file path, `[heap]`, `[stack]`, `[anon: ...]`, etc.), and
+Extracts hex address range, label (file path, `[heap]`, `[stack]`, `[anon: ...]`, etc.), `LabelType`, and
 page counts from `Rss:` / `Swap:` lines via `parseKBToPages`.
 
+### LoadSmapsRangesForThread(pid int, tid int) ([]AddrRange, error)
+
+Reads `/proc/PID/task/TID/smaps` for a specific task created through `clone(CLONE_THREAD, ...)`.
+Used by `internal/app.DBHelper.HandleCloneEvent` to append a new thread view to an existing process.
+
 **Label extraction rules (`extractLabel`):**
-- Field 6+ present: if starts with `[` or `/` or `anon_inode:` → use joined remainder as label.
-- Numeric-only remainder → return `""`.
-- Otherwise → return field 6 as label.
+- Fewer than 6 fields → `LabelType=Empty`, `Label=""`.
+- Empty remainder → `LabelType=Empty`, `Label=""`.
+- Contains `[heap]` → `LabelType=Heap`.
+- Contains `[stack]` → `LabelType=Stack`.
+- Any other `[`-prefixed label (including `[anon: ...]`) → `LabelType=Other`.
+- Non-bracketed label containing `anon` → `LabelType=Anonymous`.
+- `/`-prefixed label → `LabelType=FileBacked`.
+- Numeric-only remainder → `LabelType=Anonymous`.
+- Fallback → `LabelType=Other`.
 
 ### ReadPagemap(pid int, vaddr uint64) (*PagemapEntry, error)
 

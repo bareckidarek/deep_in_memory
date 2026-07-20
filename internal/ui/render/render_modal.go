@@ -9,48 +9,86 @@ import (
 	"deep_in_memory/internal/constants"
 )
 
-// RenderWithModal overlays a modal/notification dialog on top of the main content.
-// modalType must be one of constants.ModalTypeInfo, ModalTypeWarn, or ModalTypeError.
-func RenderWithModal(baseContent, modalType, modalMessage string, width, height int) string {
-	var bgColor string
+func modalBackgroundColor(modalType string) string {
 	switch modalType {
 	case constants.ModalTypeInfo:
-		bgColor = "12" // Blue
+		return constants.ModalInfoColor
 	case constants.ModalTypeWarn:
-		bgColor = "214" // Orange
+		return constants.ModalWarnColor
 	case constants.ModalTypeError:
-		bgColor = "9" // Red
+		return constants.ModalErrorColor
 	default:
-		bgColor = "12"
+		return constants.ModalInfoColor
 	}
+}
 
-	// Create 3-line modal with text in the middle line
-	horizontalPadding := 5
+func buildModalLines(modalMessage string, bgColor string) []string {
+	horizontalPadding := constants.ModalHorizontalPadding
 	textWidth := lipgloss.Width(modalMessage)
 	totalWidth := textWidth + (horizontalPadding * 2)
 
 	emptyLine := strings.Repeat(" ", totalWidth)
 	centeredText := strings.Repeat(" ", horizontalPadding) + modalMessage + strings.Repeat(" ", horizontalPadding)
 
-	modalLines := []string{emptyLine, centeredText, emptyLine}
-
 	modalStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(bgColor)).
 		Foreground(lipgloss.Color("#000000")).
 		Bold(true)
 
-	var styledLines []string
-	for _, line := range modalLines {
-		styledLines = append(styledLines, modalStyle.Render(line))
+	return []string{
+		modalStyle.Render(emptyLine),
+		modalStyle.Render(centeredText),
+		modalStyle.Render(emptyLine),
 	}
+}
 
-	modalHeight := len(styledLines)
-	modalWidth := lipgloss.Width(styledLines[0])
-
+func normalizeBaseLines(baseContent string, width, height int) []string {
 	baseLines := strings.Split(baseContent, "\n")
 	if len(baseLines) > height {
 		baseLines = baseLines[:height]
 	}
+
+	normalized := make([]string, 0, height)
+	for i := 0; i < height; i++ {
+		line := strings.Repeat(" ", width)
+		if i < len(baseLines) {
+			line = baseLines[i]
+		}
+
+		visualWidth := ansi.StringWidth(line)
+		if visualWidth < width {
+			line += strings.Repeat(" ", width-visualWidth)
+		}
+		normalized = append(normalized, line)
+	}
+
+	return normalized
+}
+
+func overlayModalLine(baseLine, modalLine string, modalX int) string {
+	modalWidth := lipgloss.Width(modalLine)
+	leftPart := ""
+	if modalX > 0 {
+		leftPart = ansi.Truncate(baseLine, modalX, "")
+	}
+
+	baseWidth := ansi.StringWidth(baseLine)
+	rightPart := ""
+	skipChars := modalX + modalWidth
+	if skipChars < baseWidth {
+		rightPart = ansi.TruncateLeft(baseLine, skipChars, "")
+	}
+
+	return leftPart + modalLine + rightPart
+}
+
+// RenderWithModal overlays a modal/notification dialog on top of the main content.
+// modalType must be one of constants.ModalTypeInfo, ModalTypeWarn, or ModalTypeError.
+func RenderWithModal(baseContent, modalType, modalMessage string, width, height int) string {
+	styledLines := buildModalLines(modalMessage, modalBackgroundColor(modalType))
+	modalHeight := len(styledLines)
+	modalWidth := lipgloss.Width(styledLines[0])
+	baseLines := normalizeBaseLines(baseContent, width, height)
 
 	modalY := constants.ModalTopOffset
 	if modalY < 0 {
@@ -62,41 +100,14 @@ func RenderWithModal(baseContent, modalType, modalMessage string, width, height 
 		modalX = 0
 	}
 
-	var outputLines []string
+	outputLines := make([]string, 0, height)
 	for i := 0; i < height; i++ {
-		var baseLine string
-		if i < len(baseLines) {
-			baseLine = baseLines[i]
-		} else {
-			baseLine = strings.Repeat(" ", width)
-		}
-
-		visualWidth := ansi.StringWidth(baseLine)
-		if visualWidth < width {
-			baseLine += strings.Repeat(" ", width-visualWidth)
-		}
+		baseLine := baseLines[i]
 
 		if i >= modalY && i < modalY+modalHeight {
 			modalLineIdx := i - modalY
 			modalLine := styledLines[modalLineIdx]
-			modalLineWidth := lipgloss.Width(modalLine)
-
-			leftPart := ""
-			if modalX > 0 {
-				leftPart = ansi.Truncate(baseLine, modalX, "")
-			}
-
-			rightPart := ""
-			skipChars := modalX + modalLineWidth
-			if skipChars < visualWidth {
-				fullWidth := ansi.StringWidth(baseLine)
-				charsToKeep := fullWidth - skipChars
-				if charsToKeep > 0 {
-					rightPart = ansi.TruncateLeft(baseLine, skipChars, "")
-				}
-			}
-
-			outputLines = append(outputLines, leftPart+modalLine+rightPart)
+			outputLines = append(outputLines, overlayModalLine(baseLine, modalLine, modalX))
 		} else {
 			outputLines = append(outputLines, baseLine)
 		}

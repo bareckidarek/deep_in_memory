@@ -33,14 +33,21 @@ m.asyncWriter.EnqueueExit(pid, func(h *DBHelper) error { ... })  // process exit
 UI freezes. `EnqueueExit` marks the PID as dead **before** queueing the delete, ensuring no subsequent
 event can resurrect a dead process.
 
-### handleTracedEvent — targetPID gate
+### handleTracedEvent — targetPIDs gate
 
-All mmap/munmap/brk/paging events are guarded by `targetPID`. Only events for the currently selected
+All `clone`/`mmap`/`munmap`/`brk`/paging events are guarded by `targetPIDs`. Only events for the currently selected
 process are persisted; background processes are ignored:
 
 ```go
 func (m *Model) handleTracedEvent(pid int, handler func(*DBHelper) error, ...) (tea.Model, tea.Cmd) {
-    if m.targetPID != pid {
+    found := false
+    for _, target := range m.targetPIDs {
+        if target == pid {
+            found = true
+            break
+        }
+    }
+    if !found {
         return m, nil
     }
     m.asyncWriter.Enqueue(pid, handler)
@@ -65,10 +72,15 @@ EnqueueExit(pid, ...)   // 1. marks PID dead in exitedPIDs map — future Enqueu
 |--------|-------------|---------|
 | `HandleProcessExec` | `uimsg.ProcessExec` | Creates `ProcessData` in main DB |
 | `HandleProcessExit` | `uimsg.ProcessExit` | Deletes from both DBs |
+| `HandleCloneEvent` | `uimsg.ProcessClone` | Creates a child process record or appends a thread snapshot |
 | `HandleMmapEvent` | `uimsg.ProcessMmap` | Calls `AddMmapRange` on existing process |
 | `HandleMunmapEvent` | `uimsg.ProcessMunmap` | Calls `RemoveMmapRange` |
 | `HandleBrkEvent` | `uimsg.ProcessBrk` | Calls `ExtendBrkRange` |
 | `HandleSwapEvent` | `uimsg.ProcessInitSwapUnswap` | Updates `AddressData` offsets + mirrors counts to `ProcessData` |
+
+`HandleCloneEvent` splits behavior by `CloneFlags`:
+1. No `CLONE_THREAD` bit → create a new `ProcessData` record keyed by the returned child PID/TID.
+2. `CLONE_THREAD` set → read `/proc/PID/task/TID/smaps`, then `AppendThread` to the existing selected process.
 
 `HandleSwapEvent` is the only handler that writes to **both** databases. It:
 1. Calls `AddPageOffset` on `AddressData` (address DB).
@@ -81,10 +93,10 @@ EnqueueExit(pid, ...)   // 1. marks PID dead in exitedPIDs map — future Enqueu
 
 Aggregates events by `(eventType, address)` within a flush interval to avoid flooding the log panel.
 
-Supported event types: `brk`, `mmap`, `munmap`, `init`, `swap_write`, `swap_read`.
+Supported event types: `brk`, `mmap`, `munmap`, `clone`, `init`, `swap_write`, `swap_read`.
 
 - `Record(eventType, addr, pid, tid)` — called synchronously from `Update()`, thread-safe.
-- `Flush(pid)` — called on each `uimsg.GetLogsMsg` tick (`constants.LogFlushInterval`), converts aggregated
+- `Flush(pids)` — called on each `uimsg.GetLogsMsg` tick (`constants.LogFlushInterval`), converts aggregated
   counts into `[]LogEntry` history (newest-first, max 30 entries).
 - `GetFormattedLogs()` — returns formatted `[]string` sent to UI via `uimsg.LogsResponseMsg`.
 
@@ -95,6 +107,7 @@ Display names for event types:
 | `brk` | `virtual memory mapping [brk]` |
 | `mmap` | `virtual memory mapping [mmap]` |
 | `munmap` | `virtual memory unmapping [munmap]` |
+| `clone` | `process/thread cloning` |
 | `init` | `lazy physical allocation` |
 | `swap_write` | `page_out` |
 | `swap_read` | `page_in` |

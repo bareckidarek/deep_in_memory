@@ -29,9 +29,9 @@ func (s *SharedState) SetTargetPID(pid int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Update eBPF map - assuming it's an array map with single element at index 0
+	// Update eBPF map - assuming it's a hash map with PID as key
 	if s.ebpfMap != nil {
-		return s.ebpfMap.Put(uint32(0), uint32(pid))
+		return s.ebpfMap.Put(uint32(pid), uint8(1)) // Value is arbitrary; presence of key indicates target PID
 	}
 
 	return nil

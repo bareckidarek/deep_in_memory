@@ -21,6 +21,17 @@ type SchedProgEvent struct {
 	Comm [16]int8
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	SchedProgMapEvents      = "events"
+	SchedProgMapTargetPids  = "target_pids"
+	SchedProgProgHandleExec = "handle_exec"
+	SchedProgProgHandleExit = "handle_exit"
+	SchedProgVarUnusedEvent = "unused_event"
+)
+
 // LoadSchedProg returns the embedded CollectionSpec for SchedProg.
 func LoadSchedProg() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_SchedProgBytes)
@@ -41,7 +52,7 @@ func LoadSchedProg() (*ebpf.CollectionSpec, error) {
 //	*SchedProgMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func LoadSchedProgObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func LoadSchedProgObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := LoadSchedProg()
 	if err != nil {
 		return err
@@ -71,8 +82,8 @@ type SchedProgProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type SchedProgMapSpecs struct {
-	Events    *ebpf.MapSpec `ebpf:"events"`
-	TargetPid *ebpf.MapSpec `ebpf:"target_pid"`
+	Events     *ebpf.MapSpec `ebpf:"events"`
+	TargetPids *ebpf.MapSpec `ebpf:"target_pids"`
 }
 
 // SchedProgVariableSpecs contains global variables before they are loaded into the kernel.
@@ -102,14 +113,14 @@ func (o *SchedProgObjects) Close() error {
 //
 // It can be passed to LoadSchedProgObjects or ebpf.CollectionSpec.LoadAndAssign.
 type SchedProgMaps struct {
-	Events    *ebpf.Map `ebpf:"events"`
-	TargetPid *ebpf.Map `ebpf:"target_pid"`
+	Events     *ebpf.Map `ebpf:"events"`
+	TargetPids *ebpf.Map `ebpf:"target_pids"`
 }
 
 func (m *SchedProgMaps) Close() error {
 	return _SchedProgClose(
 		m.Events,
-		m.TargetPid,
+		m.TargetPids,
 	)
 }
 

@@ -22,6 +22,7 @@
 |------|--------|--------|
 | `ProcessExec` | sched collector | `PID`, `Comm`, `Timestamp` |
 | `ProcessExit` | sched collector | `PID`, `Comm`, `Timestamp` |
+| `ProcessClone` | clone collector | `PID`, `TID`, `CloneFlags`, `TLS`, `Comm`, `Timestamp` |
 | `ProcessMmap` | mmap collector | `PID`, `TID`, `Addr`, `Len`, `Timestamp` |
 | `ProcessMunmap` | mmap collector | `PID`, `TID`, `Addr`, `Len`, `Timestamp` |
 | `ProcessBrk` | brk collector | `PID`, `TID`, `Brk`, `Ret`, `Timestamp` |
@@ -63,7 +64,7 @@ Heights: `VirtualMemoryPercent = 55%`, `PhysicalMemoryPercent = 45%` of availabl
 | File | Contents |
 |------|----------|
 | `model.go` | `Model` struct, `New`, `Update`, `View`, `SetDataset`, `SetTargetPIDSetter` |
-| `model_keys.go` | `keyHandlers()` — `q`, `ctrl+c`, `enter`, arrow keys, `n`/`p` (page), `tab`, `w` |
+| `model_keys.go` | `keyHandlers()` — `q`, `ctrl+c`, `enter`, `n`/`p` (page), `tab`, `j`/`k`, `w`, `f` |
 | `model_layout.go` | `syncLayout`, `layoutMetrics`, `updateStyles`, `updateViewports` |
 | `model_process.go` | List delegate rendering, `refreshList`, `renderListItem` |
 | `model_physical.go` | Physical memory input handling, pagemap lookup, suggestions dropdown |
@@ -76,7 +77,9 @@ Heights: `VirtualMemoryPercent = 55%`, `PhysicalMemoryPercent = 45%` of availabl
 | `Enter` | Select process → sets target PID in eBPF, loads smaps, shows info modal |
 | `n` / `p` | Next/previous page of virtual memory ranges |
 | `tab` | Toggle focus to/from physical memory address input |
+| `j` / `k` | Scroll `/proc/iomem` matches in the physical memory panel |
 | `w` | Toggle word-wrap in logs panel |
+| `f` | Toggle virtual-range `LabelType` filter: `Heap`+`Empty` only vs. all label types |
 | `q` / `ctrl+c` | Quit |
 | `esc` | Blur physical memory input |
 
@@ -133,7 +136,12 @@ Selection markers:
 |----------|---------|
 | `RenderVirtualEmptyContent()` | Placeholder text when no process is selected |
 | `RenderSummary(proc, pd)` | Bordered table: reservation / allocation / page-out / page-in (pages + human bytes) |
-| `RenderRangesPage(threads, page, barWidth)` | Paginated list of address ranges with colored status bars |
+| `RenderVirtualSectionContent(summary, pd, barWidth, page, viewportWidth, showAll)` | Summary + paginated ranges + filter legend |
+
+Virtual-range filtering is driven by `AddrRange.LabelType`:
+- Default view (`showAll=false`) renders only `Heap` and `Empty` ranges.
+- Pressing `f` switches to `[all]`, which exposes the remaining label types without changing the stored data.
+- The viewport shows a filter legend line: `Filter: [heap+empty]` or `Filter: [all]`.
 
 Status bar colors (from `constants`):
 - Gray → virtual reservation

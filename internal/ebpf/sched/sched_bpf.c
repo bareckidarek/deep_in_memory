@@ -20,11 +20,11 @@ struct {
 } events SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 128);
     __type(key, __u32);
-    __type(value, __u32);
-} target_pid SEC(".maps");
+    __type(value, __u8);
+} target_pids SEC(".maps");
 
 const volatile struct event *unused_event __attribute__((unused));
 
@@ -55,7 +55,6 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx) {
     e.ts = bpf_ktime_get_tai_ns();
     e.type = 2;
     e.pid = ctx->pid;
-    bpf_get_current_comm(&e.comm, sizeof(e.comm));
     return submit_event(&e);
 }
 

@@ -2,8 +2,8 @@
 
 ## Project Overview
 
-`deep_in_memory` is a Linux terminal UI (TUI) tool for real-time tracing and visualization of memory operations
-(mmap, brk, page faults, swap) for a selected process. It uses eBPF for kernel-level event collection and
+`deep_in_memory` is a Linux terminal UI (TUI) tool for real-time tracing and visualization of process lifecycle
+and memory operations (clone, mmap, brk, page faults, swap) for a selected process. It uses eBPF for kernel-level event collection and
 presents results in an interactive Bubble Tea terminal interface.
 
 **Key technologies:**
@@ -105,7 +105,7 @@ app-layer tests. Use `github.com/stretchr/testify/assert` and `require` for asse
 ## Architecture
 
 ```
-eBPF collectors (sched/mmap/brk/paging)
+eBPF collectors (sched/clone/mmap/brk/paging)
         │  emit uimsg.TimestampedEvent
         ▼
 CentralEventCollector          ← batches + sorts by timestamp across all collectors
@@ -135,6 +135,7 @@ AsyncDBWriter                  ← serializes ALL BoltDB writes (single backgrou
 | `internal/data/proc` | `/proc` readers: `smaps`, `pagemap`, `iomem` |
 | `internal/ebpf` | `CentralEventCollector`, `SharedState` (shared eBPF map for target PID) |
 | `internal/ebpf/sched` | Tracepoints: `sched_process_exec`, `sched_process_exit` |
+| `internal/ebpf/clone` | Tracepoints: `sys_enter_clone`, `sys_exit_clone` |
 | `internal/ebpf/mmap` | Tracepoints: `sys_enter_mmap`, `sys_exit_mmap`, `sys_enter_munmap` |
 | `internal/ebpf/brk` | Tracepoints: `sys_enter_brk`, `sys_exit_brk` |
 | `internal/ebpf/paging` | Kprobes: `do_anonymous_page`, `do_swap_page`, `swap_writepage` |
@@ -169,9 +170,11 @@ AsyncDBWriter                  ← serializes ALL BoltDB writes (single backgrou
 - `db_helper.go` mirrors count updates from `AddressData` back into `ProcessData`.
 
 ### Target PID gating
-- `targetPID` (set via `SharedState.SetTargetPID`) is the gate for traced-event handling
-  and log aggregation. Background process lifecycle events (exec/exit) are recorded broadly;
-  mmap/brk/paging handling is filtered to the selected PID only.
+- The shared eBPF `target_pids` map and app-level `targetPIDs` slice gate traced-event handling
+  and log aggregation. Background process lifecycle events (`exec`/`exit`) are recorded broadly;
+  `clone`, `mmap`, `brk`, and paging handling are filtered to the currently selected PID.
+- `clone` handling distinguishes tasks from subprocesses: `CLONE_THREAD` adds a thread entry to the
+  selected process, while a clone without `CLONE_THREAD` creates a separate child `ProcessData` record.
 
 ### eBPF generated files
 - **Do not hand-edit** `*_bpf.go`, `*prog_bpf*.go`, or `*prog_bpfeb.go`/`*prog_bpfel.go` files.

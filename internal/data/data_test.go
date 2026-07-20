@@ -146,6 +146,63 @@ func TestRemoveMmapRange_NoMatch(t *testing.T) {
 	assert.Len(t, pd.Threads[0].Ranges, 1)  // unchanged
 }
 
+func TestRemoveMmapRange_PartialTrimLeft(t *testing.T) {
+	pd := &ProcessData{
+		Proc: Process{PID: 1},
+		Threads: []ThreadData{{TID: 100, Ranges: []AddrRange{
+			{StartVal: 0x1000, EndVal: 0x5000, Size: (0x5000 - 0x1000) / PageSizeBytes},
+		}}},
+	}
+
+	pd.RemoveMmapRange(100, 0x1000, 0x1000)
+
+	require.Len(t, pd.Threads[0].Ranges, 1)
+	r := pd.Threads[0].Ranges[0]
+	assert.Equal(t, uint64(0x2000), r.StartVal)
+	assert.Equal(t, uint64(0x5000), r.EndVal)
+	assert.Equal(t, (uint64(0x5000)-uint64(0x2000))/PageSizeBytes, r.Size)
+}
+
+func TestRemoveMmapRange_PartialTrimRight(t *testing.T) {
+	pd := &ProcessData{
+		Proc: Process{PID: 1},
+		Threads: []ThreadData{{TID: 100, Ranges: []AddrRange{
+			{StartVal: 0x1000, EndVal: 0x5000, Size: (0x5000 - 0x1000) / PageSizeBytes},
+		}}},
+	}
+
+	pd.RemoveMmapRange(100, 0x4000, 0x1000)
+
+	require.Len(t, pd.Threads[0].Ranges, 1)
+	r := pd.Threads[0].Ranges[0]
+	assert.Equal(t, uint64(0x1000), r.StartVal)
+	assert.Equal(t, uint64(0x4000), r.EndVal)
+	assert.Equal(t, (uint64(0x4000)-uint64(0x1000))/PageSizeBytes, r.Size)
+}
+
+func TestRemoveMmapRange_PartialSplitMiddle(t *testing.T) {
+	pd := &ProcessData{
+		Proc: Process{PID: 1},
+		Threads: []ThreadData{{TID: 100, Ranges: []AddrRange{
+			{StartVal: 0x1000, EndVal: 0x5000, Size: (0x5000 - 0x1000) / PageSizeBytes},
+		}}},
+	}
+
+	pd.RemoveMmapRange(100, 0x2000, 0x1000)
+
+	require.Len(t, pd.Threads[0].Ranges, 2)
+	left := pd.Threads[0].Ranges[0]
+	right := pd.Threads[0].Ranges[1]
+
+	assert.Equal(t, uint64(0x1000), left.StartVal)
+	assert.Equal(t, uint64(0x2000), left.EndVal)
+	assert.Equal(t, (uint64(0x2000)-uint64(0x1000))/PageSizeBytes, left.Size)
+
+	assert.Equal(t, uint64(0x3000), right.StartVal)
+	assert.Equal(t, uint64(0x5000), right.EndVal)
+	assert.Equal(t, (uint64(0x5000)-uint64(0x3000))/PageSizeBytes, right.Size)
+}
+
 func TestRemoveMmapRange_NilThreads(t *testing.T) {
 	pd := &ProcessData{Proc: Process{PID: 1}}
 	pd.RemoveMmapRange(100, 0x1000, 0x1000) // should not panic

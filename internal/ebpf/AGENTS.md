@@ -12,6 +12,7 @@ Each sub-package attaches its own tracepoints or kprobes and streams typed event
 |---------|------------|----------------|
 | `internal/ebpf` | — | Infrastructure only |
 | `internal/ebpf/sched` | `sched_process_exec`, `sched_process_exit` tracepoints | `ProcessExec`, `ProcessExit` |
+| `internal/ebpf/clone` | `sys_enter_clone`, `sys_exit_clone` tracepoints | `ProcessClone` |
 | `internal/ebpf/mmap` | `sys_enter_mmap`, `sys_exit_mmap`, `sys_enter_munmap`, `sys_exit_munmap` tracepoints | `ProcessMmap`, `ProcessMunmap` |
 | `internal/ebpf/brk` | `sys_enter_brk`, `sys_exit_brk` tracepoints | `ProcessBrk` |
 | `internal/ebpf/paging` | `do_anonymous_page`, `do_swap_page` kprobes + `swap_writepage` kprobe | `ProcessInitSwapUnswap` |
@@ -77,23 +78,23 @@ collectors. Only `sched` sends directly (exec/exit events are not batched throug
 
 ## SharedState
 
-Defined in `collector.go`. Wraps the eBPF `BPF_MAP_TYPE_ARRAY` map that stores the target PID.
+Defined in `collector.go`. Wraps the shared eBPF `target_pids` map used for kernel-side PID filtering.
 All secondary collectors share this map via `MapReplacements` at load time — one eBPF map, one
 kernel filter for all collectors simultaneously.
 
 ```go
-func (s *SharedState) SetTargetPID(pid int) error   // writes uint32 at key 0
-func (s *SharedState) GetEbpfMap() *ebpf.Map         // returns map for sharing
+func (s *SharedState) SetTargetPID(pid int) error // inserts pid key into the shared map
+func (s *SharedState) GetEbpfMap() *ebpf.Map      // returns map for sharing
 ```
 
-The `sched` collector creates the `SharedState` and returns it. `mmap`, `brk`, and `paging`
+The `sched` collector creates the `SharedState` and returns it. `clone`, `mmap`, `brk`, and `paging`
 receive it as an argument and inject their map replacement during collection spec loading.
 
 ---
 
 ## ProcessEventsBatched generic helper
 
-Defined in `helpers.go`. Used by `mmap`, `brk`, and `paging` collectors to avoid code duplication:
+Defined in `helpers.go`. Used by `clone`, `mmap`, `brk`, and `paging` collectors to avoid code duplication:
 
 ```go
 func ProcessEventsBatched[T any](
@@ -115,12 +116,12 @@ Handles:
 
 ## Sub-collector pattern
 
-Every secondary collector (`mmap`, `brk`, `paging`) follows the same structure:
+Every secondary collector (`clone`, `mmap`, `brk`, `paging`) follows the same structure:
 
 ```go
 func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sharedState *ebpfshared.SharedState) (func() error, error) {
     // 1. Load BPF spec (LoadXxxProg)
-    // 2. Inject shared target_pid map via MapReplacements
+    // 2. Inject shared target_pids map via MapReplacements
     // 3. Attach links (tracepoints or kprobes)
     // 4. Create ringbuf reader
     // 5. Launch goroutine: ProcessEventsBatched(ctx, reader, processor, collector)
@@ -131,6 +132,9 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 The `sched` collector differs: it sends events directly via `p.Send` (not through `CentralEventCollector`)
 because exec/exit events must reach the app immediately and do not need timestamp-ordering with paging events.
 
+The `clone` collector correlates `sys_enter_clone` and `sys_exit_clone` via its `clone_entries` map and emits
+`uimsg.ProcessClone` with the returned thread/process ID in the `TID` field.
+
 ---
 
 ## eBPF C sources
@@ -138,6 +142,7 @@ because exec/exit events must reach the app immediately and do not need timestam
 | File | Kernel hooks | Map types used |
 |------|-------------|----------------|
 | `sched/sched_bpf.c` | `sched_process_exec`, `sched_process_exit` | `BPF_MAP_TYPE_RINGBUF`, `BPF_MAP_TYPE_ARRAY` (target_pid) |
+| `clone/clone_bpf.c` | `sys_enter_clone`, `sys_exit_clone` | `RINGBUF`, `HASH` (target_pids), `HASH` (enter→exit correlation) |
 | `mmap/mmap_bpf.c` | `sys_enter/exit_mmap`, `sys_enter/exit_munmap` | `RINGBUF`, `ARRAY` (target_pid), `HASH` (enter→exit correlation) |
 | `brk/brk_bpf.c` | `sys_enter/exit_brk` | `RINGBUF`, `ARRAY` (target_pid), `HASH` (enter→exit correlation) |
 | `paging/paging_bpf.c` | `do_anonymous_page`, `do_swap_page`, `swap_writepage` kprobes/kretprobes | `RINGBUF`, `ARRAY` (target_pid) |
@@ -162,7 +167,7 @@ if err != nil {
 }
 ```
 
-Secondary collectors (`mmap`, `brk`, `paging`) are started in a loop in `startCollectors`; each
+Secondary collectors (`clone`, `mmap`, `brk`, `paging`) are started in a loop in `startCollectors`; each
 failure is independently reported as a warning, and successful collectors continue running.
 
 ---

@@ -26,6 +26,21 @@ type MmapProgMmapEvent struct {
 	Comm [16]int8
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	MmapProgMapEvents             = "events"
+	MmapProgMapMmapEntries        = "mmap_entries"
+	MmapProgMapMunmapEntries      = "munmap_entries"
+	MmapProgMapTargetPids         = "target_pids"
+	MmapProgProgHandleMmapEnter   = "handle_mmap_enter"
+	MmapProgProgHandleMmapExit    = "handle_mmap_exit"
+	MmapProgProgHandleMunmapEnter = "handle_munmap_enter"
+	MmapProgProgHandleMunmapExit  = "handle_munmap_exit"
+	MmapProgVarUnusedEvent        = "unused_event"
+)
+
 // LoadMmapProg returns the embedded CollectionSpec for MmapProg.
 func LoadMmapProg() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_MmapProgBytes)
@@ -46,7 +61,7 @@ func LoadMmapProg() (*ebpf.CollectionSpec, error) {
 //	*MmapProgMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func LoadMmapProgObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func LoadMmapProgObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := LoadMmapProg()
 	if err != nil {
 		return err
@@ -81,7 +96,7 @@ type MmapProgMapSpecs struct {
 	Events        *ebpf.MapSpec `ebpf:"events"`
 	MmapEntries   *ebpf.MapSpec `ebpf:"mmap_entries"`
 	MunmapEntries *ebpf.MapSpec `ebpf:"munmap_entries"`
-	TargetPid     *ebpf.MapSpec `ebpf:"target_pid"`
+	TargetPids    *ebpf.MapSpec `ebpf:"target_pids"`
 }
 
 // MmapProgVariableSpecs contains global variables before they are loaded into the kernel.
@@ -114,7 +129,7 @@ type MmapProgMaps struct {
 	Events        *ebpf.Map `ebpf:"events"`
 	MmapEntries   *ebpf.Map `ebpf:"mmap_entries"`
 	MunmapEntries *ebpf.Map `ebpf:"munmap_entries"`
-	TargetPid     *ebpf.Map `ebpf:"target_pid"`
+	TargetPids    *ebpf.Map `ebpf:"target_pids"`
 }
 
 func (m *MmapProgMaps) Close() error {
@@ -122,7 +137,7 @@ func (m *MmapProgMaps) Close() error {
 		m.Events,
 		m.MmapEntries,
 		m.MunmapEntries,
-		m.TargetPid,
+		m.TargetPids,
 	)
 }
 

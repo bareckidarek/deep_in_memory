@@ -25,7 +25,7 @@ type Model struct {
 	asyncWriter     *AsyncDBWriter // ALL DB writes go through this
 	refreshInterval time.Duration
 	logAggregator   *LogAggregator
-	targetPID       int // Currently monitored PID
+	targetPIDs      []int // Currently monitored PIDs
 }
 
 // New creates the main application model that coordinates UI, database, and eBPF collectors.
@@ -39,7 +39,7 @@ func New(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.AddressData]
 		asyncWriter:     NewAsyncDBWriter(dbHelper, nil), // errCallback set via SetErrorCallback
 		refreshInterval: refresh,
 		logAggregator:   NewLogAggregator(),
-		targetPID:       0,
+		targetPIDs:      []int{},
 	}
 	return m
 }
@@ -48,7 +48,7 @@ func New(db storedb.Db[data.ProcessData], addressDB storedb.Db[data.AddressData]
 func (m *Model) SetTargetPIDSetter(fn func(int) error) {
 	// Wrap the function to also track the target PID
 	wrapper := func(pid int) error {
-		m.targetPID = pid
+		m.targetPIDs = []int{pid}
 		return fn(pid)
 	}
 	m.ui.SetTargetPIDSetter(wrapper)
@@ -110,12 +110,19 @@ func (m *Model) updateUI(msg tea.Msg) tea.Cmd {
 // handleTracedEvent enqueues an eBPF event for async DB processing.
 // The DB write happens in the background goroutine — Update() never blocks on BoltDB.
 // Logging happens immediately (logs don't depend on DB state).
-func (m *Model) handleTracedEvent(pid int, handler func(*DBHelper) error, logType string, logAddr uint64, tid int) (tea.Model, tea.Cmd) {
-	if m.targetPID != pid {
+func (m *Model) handleTracedEvent(pid int, handler func(*DBHelper) error, logType string, logAddr, logLen uint64, tid int) (tea.Model, tea.Cmd) {
+	found := false
+	for _, target := range m.targetPIDs {
+		if target == pid {
+			found = true
+			break
+		}
+	}
+	if !found {
 		return m, nil
 	}
 	m.asyncWriter.Enqueue(pid, handler)
-	m.logAggregator.Record(logType, logAddr, pid, tid)
+	m.logAggregator.Record(logType, logAddr, logLen, pid, tid)
 	return m, nil
 }
 
@@ -132,8 +139,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case uimsg.GetLogsMsg:
-		if m.targetPID != 0 {
-			m.logAggregator.Flush(m.targetPID)
+		if len(m.targetPIDs) > 0 {
+			m.logAggregator.Flush(m.targetPIDs)
 		}
 		logs := m.logAggregator.GetFormattedLogs()
 		cmd := m.updateUI(uimsg.LogsResponseMsg{Logs: logs})
@@ -155,20 +162,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.asyncWriter.EnqueueExit(v.PID, func(h *DBHelper) error {
 			return h.HandleProcessExit(v)
 		})
-		if v.PID == m.targetPID {
-			m.targetPID = 0
+		for i, target := range m.targetPIDs {
+			if target == v.PID {
+				m.targetPIDs = append(m.targetPIDs[:i], m.targetPIDs[i+1:]...)
+				break
+			}
 		}
 		// Clear physical memory section state via UI message
 		return m, m.updateUI(uimsg.ClearPhysicalMemoryMsg{PID: v.PID})
 
+	case uimsg.ProcessClone:
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleCloneEvent(v) }, "clone", 0, 0, v.TID)
+
 	case uimsg.ProcessMmap:
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMmapEvent(v) }, "mmap", v.Addr, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMmapEvent(v) }, "mmap", v.Addr, v.Len, v.TID)
 
 	case uimsg.ProcessMunmap:
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMunmapEvent(v) }, "munmap", v.Addr, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMunmapEvent(v) }, "munmap", v.Addr, v.Len, v.TID)
 
 	case uimsg.ProcessBrk:
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleBrkEvent(v) }, "brk", v.Ret, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleBrkEvent(v) }, "brk", v.Ret, 0, v.TID)
 
 	case uimsg.ProcessInitSwapUnswap:
 		logType := ""
@@ -180,7 +193,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case 2:
 			logType = "swap_read"
 		}
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleSwapEvent(v) }, logType, v.Address, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandlePagingEvent(v) }, logType, v.Address, 0, v.TID)
 
 	case uimsg.LoadSmapsRequest:
 		// Read /proc smaps synchronously (fast I/O), queue DB write async

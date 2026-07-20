@@ -13,8 +13,67 @@ import (
 // LoadSmapsRanges reads /proc/PID/smaps and returns memory ranges as ThreadData.
 // All ranges are assigned to TID=PID since smaps doesn't distinguish threads.
 func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
-	smapsPath := fmt.Sprintf("/proc/%d/smaps", pid)
-	file, err := os.Open(smapsPath)
+	mainRanges, err := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", pid))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(mainRanges) == 0 {
+		return nil, nil
+	}
+
+	threads := []data.ThreadData{{
+		TID:    pid,
+		Ranges: mainRanges,
+	}}
+
+	mainRangeSet := buildRangeSet(mainRanges)
+
+	taskIDs, err := readTaskIds(pid)
+	if err != nil {
+		return threads, nil
+	}
+
+	for _, taskID := range taskIDs {
+		taskRanges, loadErr := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", taskID))
+		if loadErr != nil {
+			threads = append(threads, data.ThreadData{TID: taskID, Ranges: nil})
+			continue
+		}
+
+		taskUniqueRanges := filterRangesNotInSet(taskRanges, mainRangeSet)
+
+		threads = append(threads, data.ThreadData{TID: taskID, Ranges: taskUniqueRanges})
+	}
+
+	return threads, nil
+}
+
+// LoadSmapsRangesForThread reads /proc/PID/task/TID/smaps and returns memory ranges for a specific thread.
+// It filters out ranges that are already present in the main process's smaps to avoid duplicates.
+func LoadSmapsRangesForThread(pid int, tid int) ([]data.AddrRange, error) {
+	ranges, err := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", tid))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+
+	mainRanges, err := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", pid))
+	if err != nil {
+		return ranges, nil
+	}
+
+	mainRangeSet := buildRangeSet(mainRanges)
+	uniqueRanges := filterRangesNotInSet(ranges, mainRangeSet)
+
+	return uniqueRanges, nil
+}
+
+func loadRangesFromSmapsPath(path string) ([]data.AddrRange, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open smaps: %w", err)
 	}
@@ -42,7 +101,7 @@ func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 			}
 
 			// Extract label
-			label := extractLabel(fields, line)
+			labelType, label := extractLabel(fields)
 
 			// Parse address range
 			addrRange := fields[0]
@@ -67,14 +126,15 @@ func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 
 			size := endAddr - startAddr
 			newRange := data.AddrRange{
-				Start:    parts[0],
-				End:      parts[1],
-				StartVal: startAddr,
-				EndVal:   endAddr,
-				Size:     size / data.PageSizeBytes,
-				PrevSize: size / data.PageSizeBytes, // Initialize PrevSize to current size
-				Statuses: make(map[string]*data.StatusCount),
-				Label:    label,
+				Start:     parts[0],
+				End:       parts[1],
+				StartVal:  startAddr,
+				EndVal:    endAddr,
+				Size:      size / data.PageSizeBytes,
+				PrevSize:  size / data.PageSizeBytes, // Initialize PrevSize to current size
+				Statuses:  make(map[string]*data.StatusCount),
+				Label:     label,
+				LabelType: labelType,
 			}
 
 			// Initialize counters to zero
@@ -112,47 +172,83 @@ func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 		return nil, nil
 	}
 
-	// Sort ranges before returning
+	// Sort ranges before returning.
 	data.SortRanges(ranges)
+	return ranges, nil
+}
 
-	// Return all ranges under a single ThreadData with TID=PID
-	return []data.ThreadData{
-		{
-			TID:    pid,
-			Ranges: ranges,
-		},
-	}, nil
+func readTaskIds(pid int) ([]int, error) {
+	taskPath := fmt.Sprintf("/proc/%d/task/", pid)
+	entries, err := os.ReadDir(taskPath)
+	if err != nil {
+		return nil, fmt.Errorf("read task IDs: %w", err)
+	}
+
+	fields := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		tid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		if tid == pid { // Exclude the main thread (PID)
+			continue
+		}
+		fields = append(fields, tid)
+	}
+
+	return fields, nil
+}
+
+func buildRangeSet(ranges []data.AddrRange) map[string]struct{} {
+	set := make(map[string]struct{}, len(ranges))
+	for _, r := range ranges {
+		set[rangeKey(r)] = struct{}{}
+	}
+	return set
+}
+
+func filterRangesNotInSet(ranges []data.AddrRange, rangeSet map[string]struct{}) []data.AddrRange {
+	filtered := make([]data.AddrRange, 0, len(ranges))
+	for _, r := range ranges {
+		if _, exists := rangeSet[rangeKey(r)]; exists {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+func rangeKey(r data.AddrRange) string {
+	return fmt.Sprintf("%x-%x", r.StartVal, r.EndVal)
 }
 
 // extractLabel parses the label portion of a smaps header line.
 // Returns the label string (e.g. "[heap]", "/usr/lib/...", or "" for anonymous memory).
-func extractLabel(fields []string, line string) string {
+func extractLabel(fields []string) (data.LabelType, string) {
 	if len(fields) < 6 {
-		return ""
+		return data.Empty, ""
 	}
-
-	// Reconstruct everything after the 5th field (inode/device).
-	parts := strings.SplitN(line, " ", 6)
-	if len(parts) < 6 {
-		return ""
-	}
-	remainder := strings.TrimSpace(parts[5])
+	extractedLabel := strings.TrimSpace(strings.Join(fields[5:], " "))
 
 	switch {
-	case remainder == "":
-		return ""
-	case strings.HasPrefix(remainder, "["):
-		return remainder // e.g. [heap], [stack], [anon: Go: gc bits]
-	case strings.Contains(remainder, "anon"):
-		return remainder // e.g. anon_inode:bpf-map
-	case strings.HasPrefix(remainder, "/"):
-		return remainder // file-backed mapping
+	case extractedLabel == "":
+		return data.Empty, ""
+	case strings.Contains(extractedLabel, "[heap]"):
+		return data.Heap, extractedLabel
+	case strings.Contains(extractedLabel, "[stack]"):
+		return data.Stack, extractedLabel
+	case strings.Contains(extractedLabel, "anon"):
+		return data.Anonymous, extractedLabel
+	case strings.HasPrefix(extractedLabel, "["):
+		return data.Other, extractedLabel
+	case strings.HasPrefix(extractedLabel, "/"):
+		return data.FileBacked, extractedLabel
 	default:
 		// Check if it's just a number (inode) — treat as anonymous
-		if _, err := strconv.ParseUint(remainder, 10, 64); err == nil {
-			return ""
+		if _, err := strconv.ParseUint(extractedLabel, 10, 64); err == nil {
+			return data.Anonymous, extractedLabel
 		}
-		return remainder
+		return data.Other, extractedLabel
 	}
 }
 

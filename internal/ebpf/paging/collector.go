@@ -26,15 +26,15 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
 
-	// Reuse the target_pid map from sched
-	spec.Maps["target_pid"].Pinning = 0
+	// Reuse the target_pids map from sched
+	spec.Maps["target_pids"].Pinning = 0
 
 	opts := &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{
 			PinPath: "",
 		},
 		MapReplacements: map[string]*ebpf.Map{
-			"target_pid": sharedState.GetEbpfMap(),
+			"target_pids": sharedState.GetEbpfMap(),
 		},
 	}
 
@@ -110,7 +110,7 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 		ts := time.Unix(0, int64(e.Ts))
 
 		switch e.Type {
-		case 0: // do_swap_page
+		case 0: // do_anonymous_page
 			return uimsg.ProcessInitSwapUnswap{
 				Timestamp: ts,
 				PID:       int(e.Pid),

@@ -118,7 +118,7 @@ func (ad *AddressData) GetStatusCounts(tid int, rangeStartVal uint64) map[string
 
 	// Find thread
 	for _, thread := range ad.Threads {
-		if thread.TID != tid {
+		if tid != 0 && thread.TID != tid {
 			continue
 		}
 
@@ -127,9 +127,8 @@ func (ad *AddressData) GetStatusCounts(tid int, rangeStartVal uint64) map[string
 			if r.StartVal == rangeStartVal {
 				// Count values in each status
 				for status, offsets := range r.Statuses {
-					counts[status] = len(offsets.Value)
+					counts[status] += len(offsets.Value)
 				}
-				return counts
 			}
 		}
 	}

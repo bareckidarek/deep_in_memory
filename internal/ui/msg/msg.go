@@ -22,6 +22,16 @@ type ProcessExit struct {
 	Comm      string
 }
 
+// ProcessClone is emitted when a process calls clone.
+type ProcessClone struct {
+	Timestamp  time.Time
+	PID        int
+	TID        int
+	CloneFlags uint64
+	TLS        uint64
+	Comm       string
+}
+
 // ProcessMmap is emitted when mmap syscall succeeds.
 type ProcessMmap struct {
 	Timestamp time.Time
@@ -66,6 +76,7 @@ type ProcessInitSwapUnswap struct {
 // GetTimestamp implementations for TimestampedEvent interface
 func (e ProcessExec) GetTimestamp() time.Time           { return e.Timestamp }
 func (e ProcessExit) GetTimestamp() time.Time           { return e.Timestamp }
+func (e ProcessClone) GetTimestamp() time.Time          { return e.Timestamp }
 func (e ProcessMmap) GetTimestamp() time.Time           { return e.Timestamp }
 func (e ProcessMunmap) GetTimestamp() time.Time         { return e.Timestamp }
 func (e ProcessBrk) GetTimestamp() time.Time            { return e.Timestamp }

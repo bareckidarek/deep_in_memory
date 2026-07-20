@@ -24,11 +24,11 @@ struct {
 } events SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 128);
     __type(key, __u32);
-    __type(value, __u32);
-} target_pid SEC(".maps");
+    __type(value, __u8);
+} target_pids SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -64,15 +64,13 @@ int kprobe_do_anonymous_page(struct pt_regs *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
     
-    __u32 key = 0;
-    __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
+    __u8 *exists = bpf_map_lookup_elem(&target_pids, &pid);
 
-    if (!target || *target == 0) {
+    if (!exists) {
         return 0; // No target set, skip
     }
-    if (pid != *target) {
-        return 0; // Not the target PID
-    }
+
+    bpf_printk("kprobe_do_anonymous_page: pid=%d, tid=%d\n", pid, (__u32)pid_tgid);
 
     struct paging_event evt = {};
     evt.ts = bpf_ktime_get_ns();
@@ -97,17 +95,7 @@ int kprobe_do_anonymous_page(struct pt_regs *ctx) {
 SEC("kretprobe/do_anonymous_page")
 int kretprobe_do_anonymous_page(struct pt_regs *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u32 pid = pid_tgid >> 32;
     
-    __u32 key = 0;
-    __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
-    if (!target || *target == 0) {
-        return 0; // No target set, skip
-    }
-    if (pid != *target) {
-        return 0; // Not the target PID
-    }
-
     struct paging_event *evt = bpf_map_lookup_elem(&anonymous_entries, &pid_tgid);
     if (!evt) {
         return 0;
@@ -129,14 +117,9 @@ int kprobe_swap_writepage(struct pt_regs *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
     
-    __u32 key = 0;
-    __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
-
-    if (!target || *target == 0) {
+    __u8 *exists = bpf_map_lookup_elem(&target_pids, &pid);
+    if (!exists) {
         return 0; // No target set, skip
-    }
-    if (pid != *target) {
-        return 0; // Not the target PID
     }
 
     struct paging_event evt = {};
@@ -162,17 +145,7 @@ int kprobe_swap_writepage(struct pt_regs *ctx) {
 SEC("kretprobe/swap_writepage")
 int kretprobe_swap_writepage(struct pt_regs *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u32 pid = pid_tgid >> 32;
     
-    __u32 key = 0;
-    __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
-    if (!target || *target == 0) {
-        return 0; // No target set, skip
-    }
-    if (pid != *target) {
-        return 0; // Not the target PID
-    }
-
     struct paging_event *evt = bpf_map_lookup_elem(&swap_writepage_entries, &pid_tgid);
     if (!evt) {
         return 0;
@@ -194,14 +167,9 @@ int kprobe_do_swap_page(struct pt_regs *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
     
-    __u32 key = 0;
-    __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
-
-    if (!target || *target == 0) {
+    __u8 *exists = bpf_map_lookup_elem(&target_pids, &pid);
+    if (!exists) {
         return 0; // No target set, skip
-    }
-    if (pid != *target) {
-        return 0; // Not the target PID
     }
 
     struct paging_event evt = {};
@@ -227,17 +195,7 @@ int kprobe_do_swap_page(struct pt_regs *ctx) {
 SEC("kretprobe/do_swap_page")
 int kretprobe_do_swap_page(struct pt_regs *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u32 pid = pid_tgid >> 32;
     
-    __u32 key = 0;
-    __u32 *target = bpf_map_lookup_elem(&target_pid, &key);
-    if (!target || *target == 0) {
-        return 0; // No target set, skip
-    }
-    if (pid != *target) {
-        return 0; // Not the target PID
-    }
-
     struct paging_event *evt = bpf_map_lookup_elem(&swap_entries, &pid_tgid);
     if (!evt) {
         return 0;
