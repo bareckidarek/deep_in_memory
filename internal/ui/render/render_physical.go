@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"deep_in_memory/internal/constants"
+	"github.com/dustin/go-humanize"
 )
 
 // SuggestionItem represents a single address suggestion with its memory status.
@@ -41,15 +42,19 @@ type IomemRangeDisplay struct {
 	Highlight bool // Whether this range is highlighted (PFN match)
 }
 
-// RenderPhysicalSectionContent builds the physical memory section text with two columns.
-func RenderPhysicalSectionContent(state PhysicalMemoryState) string {
-	if state.TotalWidth < 20 {
-		state.TotalWidth = 60
+type physicalColumnsLayout struct {
+	leftWidth   int
+	rightWidth  int
+	availHeight int
+}
+
+func calculatePhysicalColumnsLayout(totalWidth, totalHeight int) physicalColumnsLayout {
+	if totalWidth < 20 {
+		totalWidth = 60
 	}
 
-	// Split into two columns: left (pagemap input/results), right (iomem)
-	leftWidth := state.TotalWidth / 2
-	rightWidth := state.TotalWidth - leftWidth - 1 // -1 for separator
+	leftWidth := totalWidth / 2
+	rightWidth := totalWidth - leftWidth - 1 // -1 for separator
 	if leftWidth < 20 {
 		leftWidth = 20
 	}
@@ -57,30 +62,28 @@ func RenderPhysicalSectionContent(state PhysicalMemoryState) string {
 		rightWidth = 20
 	}
 
-	leftContent := renderLeftColumn(state, leftWidth)
-	rightContent := renderRightColumn(state, rightWidth)
+	availHeight := totalHeight - 2 // account for title
+	if availHeight < 5 {
+		availHeight = 5
+	}
 
-	// Join columns with a vertical separator
+	return physicalColumnsLayout{
+		leftWidth:   leftWidth,
+		rightWidth:  rightWidth,
+		availHeight: availHeight,
+	}
+}
+
+func mergePhysicalColumns(leftContent, rightContent string, leftWidth, maxLines int) string {
 	leftLines := strings.Split(leftContent, "\n")
 	rightLines := strings.Split(rightContent, "\n")
 
-	maxLines := len(leftLines)
 	if len(rightLines) > maxLines {
 		maxLines = len(rightLines)
 	}
 
-	// Limit to available height
-	availHeight := state.TotalHeight - 2 // account for title
-	if availHeight < 5 {
-		availHeight = 5
-	}
-	if maxLines > availHeight {
-		maxLines = availHeight
-	}
-
 	separator := lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("│")
-
-	var combined []string
+	combined := make([]string, 0, maxLines)
 	for i := 0; i < maxLines; i++ {
 		var left, right string
 		if i < len(leftLines) {
@@ -90,7 +93,6 @@ func RenderPhysicalSectionContent(state PhysicalMemoryState) string {
 			right = rightLines[i]
 		}
 
-		// Pad left column to fixed width
 		leftVisual := ansi.StringWidth(left)
 		if leftVisual < leftWidth {
 			left += strings.Repeat(" ", leftWidth-leftVisual)
@@ -101,12 +103,24 @@ func RenderPhysicalSectionContent(state PhysicalMemoryState) string {
 		combined = append(combined, left+separator+right)
 	}
 
+	return strings.Join(combined, "\n")
+}
+
+// RenderPhysicalSectionContent builds the physical memory section text with two columns.
+func RenderPhysicalSectionContent(state PhysicalMemoryState) string {
+	layout := calculatePhysicalColumnsLayout(state.TotalWidth, state.TotalHeight)
+
+	leftContent := renderLeftColumn(state, layout.leftWidth)
+	rightContent := renderRightColumn(state, layout.rightWidth)
+	maxLines := layout.availHeight
+	combined := mergePhysicalColumns(leftContent, rightContent, layout.leftWidth, maxLines)
+
 	title := StyleTitle("[physical memory]")
 	hint := ""
 	if !state.Focused {
-		hint = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("  [Tab to focus input]")
+		hint = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render(constants.PhysicalHintTabToFocus)
 	}
-	return title + hint + "\n\n" + strings.Join(combined, "\n")
+	return title + hint + "\n\n" + combined
 }
 
 // renderLeftColumn renders the pagemap input and results column.
@@ -152,28 +166,17 @@ func renderSuggestions(suggestions []SuggestionItem, selected int, width int) st
 	var lines []string
 
 	for i, item := range suggestions {
-		// Determine background color based on status
-		var bgColor string
-		switch item.Status {
-		case "INIT":
-			bgColor = constants.GreenColor
-		case "SWAP":
-			bgColor = constants.RedColor
-		case "UNSWAP":
-			bgColor = constants.BlueColor
-		default: // Reserved (no specific status)
-			bgColor = constants.GrayColor
-		}
+		normalColor, _ := StatusColors(item.Status)
 
 		// Base style with status-based background
 		style := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#000000")).
-			Background(lipgloss.Color(bgColor))
+			Background(lipgloss.Color(normalColor))
 
 		// Add marker and bold for selected item
-		prefix := "  "
+		prefix := constants.MarkerDefaultPrefix
 		if i == selected {
-			prefix = "► "
+			prefix = constants.MarkerSelectedPrefix
 			style = style.Bold(true).Foreground(lipgloss.Color("#ffffff"))
 		}
 
@@ -209,41 +212,27 @@ func renderRightColumn(state PhysicalMemoryState, width int) string {
 		Bold(true)
 
 	// Apply scroll offset
-	startIdx := state.ScrollOffset
-	if startIdx < 0 {
-		startIdx = 0
-	}
-	if startIdx >= len(state.IomemRanges) {
-		startIdx = len(state.IomemRanges) - 1
-		if startIdx < 0 {
-			startIdx = 0
-		}
-	}
-
 	// Calculate how many lines we can display (total height - header - separator)
 	maxDisplayLines := state.TotalHeight - 5
 	if maxDisplayLines < 5 {
 		maxDisplayLines = 5
 	}
 
-	endIdx := startIdx + maxDisplayLines
-	if endIdx > len(state.IomemRanges) {
-		endIdx = len(state.IomemRanges)
-	}
+	startIdx, endIdx := CalculateScrollWindow(len(state.IomemRanges), state.ScrollOffset, maxDisplayLines)
 
 	for i := startIdx; i < endIdx; i++ {
 		r := state.IomemRanges[i]
 		indent := strings.Repeat("  ", r.Level)
 
 		// Calculate range size and format with appropriate units
-		size := int64(r.End - r.Start + 1)
-		sizeStr := HumanBytes(size)
+		size := r.End - r.Start + 1
+		sizeStr := humanize.IBytes(size)
 
 		text := fmt.Sprintf("%s%x-%x %s [%s]", indent, r.Start, r.End, r.Name, sizeStr)
 
 		// Truncate if too long
-		if len(text) > width-1 {
-			text = text[:width-4] + "…"
+		if ansi.StringWidth(text) > width-1 {
+			text = ansi.Truncate(text, width-1, "…")
 		}
 
 		if r.Highlight {

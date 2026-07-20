@@ -3,14 +3,12 @@ package proc
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
 
 	"deep_in_memory/internal/data"
 )
-
 
 // LoadSmapsRanges reads /proc/PID/smaps and returns memory ranges as ThreadData.
 // All ranges are assigned to TID=PID since smaps doesn't distinguish threads.
@@ -36,20 +34,15 @@ func LoadSmapsRanges(pid int) ([]data.ThreadData, error) {
 		return threads, nil
 	}
 
-	log.Printf("LoadSmapsRanges: PID=%d, found %d tasks", pid, len(taskIDs))
-
 	for _, taskID := range taskIDs {
-		log.Printf("LoadSmapsRanges: PID=%d, loading smaps for task TID=%d", pid, taskID)
 		taskRanges, loadErr := loadRangesFromSmapsPath(fmt.Sprintf("/proc/%d/smaps", taskID))
 		if loadErr != nil {
 			threads = append(threads, data.ThreadData{TID: taskID, Ranges: nil})
 			continue
 		}
-		log.Printf("LoadSmapsRanges: PID=%d, TID=%d, found %d ranges", pid, taskID, len(taskRanges))
 
 		taskUniqueRanges := filterRangesNotInSet(taskRanges, mainRangeSet)
 
-		log.Printf("LoadSmapsRanges: PID=%d, TID=%d, %d unique ranges", pid, taskID, len(taskUniqueRanges))
 		threads = append(threads, data.ThreadData{TID: taskID, Ranges: taskUniqueRanges})
 	}
 
@@ -75,8 +68,6 @@ func LoadSmapsRangesForThread(pid int, tid int) ([]data.AddrRange, error) {
 
 	mainRangeSet := buildRangeSet(mainRanges)
 	uniqueRanges := filterRangesNotInSet(ranges, mainRangeSet)
-
-	log.Printf("LoadSmapsRangesForThread: PID=%d, TID=%d, found %d ranges, %d unique", pid, tid, len(ranges), len(uniqueRanges))
 
 	return uniqueRanges, nil
 }
@@ -135,14 +126,14 @@ func loadRangesFromSmapsPath(path string) ([]data.AddrRange, error) {
 
 			size := endAddr - startAddr
 			newRange := data.AddrRange{
-				Start:    parts[0],
-				End:      parts[1],
-				StartVal: startAddr,
-				EndVal:   endAddr,
-				Size:     size / data.PageSizeBytes,
-				PrevSize: size / data.PageSizeBytes, // Initialize PrevSize to current size
-				Statuses: make(map[string]*data.StatusCount),
-				Label:    label,
+				Start:     parts[0],
+				End:       parts[1],
+				StartVal:  startAddr,
+				EndVal:    endAddr,
+				Size:      size / data.PageSizeBytes,
+				PrevSize:  size / data.PageSizeBytes, // Initialize PrevSize to current size
+				Statuses:  make(map[string]*data.StatusCount),
+				Label:     label,
 				LabelType: labelType,
 			}
 
@@ -192,14 +183,14 @@ func readTaskIds(pid int) ([]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read task IDs: %w", err)
 	}
-	
+
 	fields := make([]int, 0, len(entries))
 	for _, entry := range entries {
 		tid, err := strconv.Atoi(entry.Name())
 		if err != nil {
 			continue
 		}
-		if(tid == pid) { // Exclude the main thread (PID)
+		if tid == pid { // Exclude the main thread (PID)
 			continue
 		}
 		fields = append(fields, tid)
@@ -238,8 +229,6 @@ func extractLabel(fields []string) (data.LabelType, string) {
 		return data.Empty, ""
 	}
 	extractedLabel := strings.TrimSpace(strings.Join(fields[5:], " "))
-
-	log.Printf("extractLabel: remainder='%s'", extractedLabel)
 
 	switch {
 	case extractedLabel == "":

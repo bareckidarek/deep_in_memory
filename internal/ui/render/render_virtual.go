@@ -6,10 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
-
-	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/dustin/go-humanize"
 )
 
 // RenderVirtualEmptyContent returns the virtual memory section text shown when no process is selected.
@@ -27,7 +28,7 @@ func RenderSummary(proc data.Process, pd *data.ProcessData) string {
 	// Build header
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Process: %s (%d)\n", proc.Name, proc.PID))
-	sb.WriteString(fmt.Sprintf("Start (UTC): %s\n\n", startUTC))
+	sb.WriteString(fmt.Sprintf("Started (UTC): %s\n\n", startUTC))
 
 	// Define column widths
 	labelWidth := 8
@@ -68,10 +69,10 @@ func RenderSummary(proc data.Process, pd *data.ProcessData) string {
 
 	sizeRow := lipgloss.JoinHorizontal(lipgloss.Top,
 		labelStyle.Render("size"),
-		col1Style.Render(HumanBytes(int64(reservationBytes))),
-		col2Style.Render(HumanBytes(int64(allocationBytes))),
-		col3Style.Render(HumanBytes(int64(pageOutBytes))),
-		col4Style.Render(HumanBytes(int64(pageInBytes))),
+		col1Style.Render(humanize.IBytes(reservationBytes)),
+		col2Style.Render(humanize.IBytes(allocationBytes)),
+		col3Style.Render(humanize.IBytes(pageOutBytes)),
+		col4Style.Render(humanize.IBytes(pageInBytes)),
 	)
 
 	// Join all rows vertically and apply border to the entire table
@@ -107,9 +108,12 @@ func calcVirtualRowsPerPage(viewportHeight int, summary string) int {
 		summaryHeight = 0
 	}
 
-	// Fixed lines in the virtual pane:
-	// title + empty line + summary + filter line + paging line + one reserved footer line.
-	fixedLines := 1 + 1 + summaryHeight + 1 + 1 + 1
+	fixedLines := constants.VirtualTitleLines +
+		constants.VirtualTitleSpacingLines +
+		summaryHeight +
+		constants.VirtualFilterLegendLines +
+		constants.VirtualPaginationInfoLine +
+		constants.VirtualReservedFooterLine
 	rowsPerPage := viewportHeight - fixedLines
 	if rowsPerPage < 1 {
 		return 1
@@ -126,8 +130,8 @@ func renderSectionWithLegend(title string, legend string, viewportWidth int, par
 	legendPlainLen := constants.StatusLegendWidth
 	titleLen := len(title) // Use plain text length for spacing calculation
 	spacing := viewportWidth - titleLen - legendPlainLen
-	if spacing < 2 {
-		spacing = 2
+	if spacing < constants.VirtualTitleLegendMinSpacing {
+		spacing = constants.VirtualTitleLegendMinSpacing
 	}
 	titleLine := styledTitle + strings.Repeat(" ", spacing) + legend
 	compact = append(compact, titleLine)
@@ -143,10 +147,15 @@ func renderSectionWithLegend(title string, legend string, viewportWidth int, par
 
 func buildColorLegend() string {
 	// Build colored legend with 2-character width boxes
-	grayBox := lipgloss.NewStyle().Background(lipgloss.Color(constants.GrayColor)).Render("  ")
-	initBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("INIT"))).Render("  ")
-	swapBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("SWAP"))).Render("  ")
-	unswapBox := lipgloss.NewStyle().Background(lipgloss.Color(colorForStatus("UNSWAP"))).Render("  ")
+	grayNormal, _ := StatusColors("gray")
+	initNormal, _ := StatusColors("INIT")
+	swapNormal, _ := StatusColors("SWAP")
+	unswapNormal, _ := StatusColors("UNSWAP")
+
+	grayBox := lipgloss.NewStyle().Background(lipgloss.Color(grayNormal)).Render("  ")
+	initBox := lipgloss.NewStyle().Background(lipgloss.Color(initNormal)).Render("  ")
+	swapBox := lipgloss.NewStyle().Background(lipgloss.Color(swapNormal)).Render("  ")
+	unswapBox := lipgloss.NewStyle().Background(lipgloss.Color(unswapNormal)).Render("  ")
 
 	return fmt.Sprintf("%s %s  %s %s  %s %s  %s %s",
 		grayBox, constants.StatusReservation,
@@ -215,43 +224,23 @@ func renderThreadRanges(procPID int, threads []data.ThreadData, barWidth int, pa
 		}
 	}
 
-	totalRows := len(rows)
-	if totalRows == 0 {
+	if len(rows) == 0 {
 		return "Virtual ranges: none", 0
 	}
 
-	if rangesPerPage < 1 {
-		rangesPerPage = 1
-	}
-	if page < 0 {
-		page = 0
-	}
+	window := CalculatePageWindow(len(rows), rangesPerPage, page)
 
-	// Calculate pagination
-	startIdx := page * rangesPerPage
-	if startIdx >= totalRows {
-		// If page is out of bounds, show last page
-		page = (totalRows - 1) / rangesPerPage
-		startIdx = page * rangesPerPage
-	}
-	endIdx := startIdx + rangesPerPage
-	if endIdx > totalRows {
-		endIdx = totalRows
-	}
-
-	totalPages := (totalRows + rangesPerPage - 1) / rangesPerPage
-
-	filterLabel := "[heap+empty]"
+	filterLabel := constants.FilterLabelHeapEmpty
 	if showAll {
-		filterLabel = "[all]"
+		filterLabel = constants.FilterLabelAll
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Filter: %s  [press f to toggle filter]\n", filterLabel))
-	b.WriteString(fmt.Sprintf("Virtual ranges (by thread) - Page %d/%d (showing %d-%d of %d) [use p/n to navigate]\n",
-		page+1, totalPages, startIdx+1, endIdx, totalRows))
+	b.WriteString(fmt.Sprintf("Filter: %s  %s\n", filterLabel, constants.VirtualFilterToggleHint))
+	b.WriteString(fmt.Sprintf("Virtual ranges (by thread) - Page %d/%d (showing %d-%d of %d) %s\n",
+		window.Page+1, window.TotalPages, window.StartIdx+1, window.EndIdx, len(rows), constants.VirtualPagingNavigateHint))
 
-	pageRows := rows[startIdx:endIdx]
+	pageRows := rows[window.StartIdx:window.EndIdx]
 	for _, row := range pageRows {
 		if row.isHeader {
 			b.WriteString(fmt.Sprintf("PID: %d, TID: %d\n", procPID, row.threadID))
@@ -263,7 +252,7 @@ func renderThreadRanges(procPID int, threads []data.ThreadData, barWidth int, pa
 		b.WriteString(fmt.Sprintf("  %s\n", bar))
 	}
 
-	return strings.TrimRight(b.String(), "\n"), page
+	return strings.TrimRight(b.String(), "\n"), window.Page
 }
 
 // segment represents a colored segment of the memory bar
@@ -334,17 +323,17 @@ func buildLabelOverlay(r data.AddrRange, startAddr string, expandedBarWidth int)
 	endInfoWidth := lipgloss.Width(endInfo)
 
 	labelText := r.Label
-	middlePos := (expandedBarWidth - len(labelText)) / 2
-	if middlePos < len(startAddr)+1 {
-		middlePos = len(startAddr) + 1
+	labelCenterPos := (expandedBarWidth - len(labelText)) / 2
+	if labelCenterPos < len(startAddr)+1 {
+		labelCenterPos = len(startAddr) + 1
 	}
 	endPos := expandedBarWidth - endInfoWidth
-	if endPos < middlePos+len(labelText)+1 {
-		endPos = middlePos + len(labelText) + 1
+	if endPos < labelCenterPos+len(labelText)+1 {
+		endPos = labelCenterPos + len(labelText) + 1
 	}
 
-	overlayText := startAddr + strings.Repeat(" ", middlePos-len(startAddr)) + labelText +
-		strings.Repeat(" ", endPos-middlePos-len(labelText)) + endInfo
+	overlayText := startAddr + strings.Repeat(" ", labelCenterPos-len(startAddr)) + labelText +
+		strings.Repeat(" ", endPos-labelCenterPos-len(labelText)) + endInfo
 
 	return truncateOverlayText(overlayText, expandedBarWidth)
 }
@@ -360,7 +349,7 @@ func buildAddressOverlay(r data.AddrRange, startAddr string, expandedBarWidth in
 
 func buildEndInfo(r data.AddrRange) string {
 	sizeBytes := r.Size * data.PageSizeBytes
-	return fmt.Sprintf("%s (100%%=%dp [%s%s])", r.End, r.Size, HumanBytes(int64(sizeBytes)), buildGrowthArrow(int64(r.Size-r.PrevSize)))
+	return fmt.Sprintf("%s (100%%=%dp [%s%s])", r.End, r.Size, humanize.IBytes(sizeBytes), buildGrowthArrow(int64(r.Size-r.PrevSize)))
 }
 
 func buildGrowthArrow(growth int64) string {
@@ -375,10 +364,12 @@ func buildGrowthArrow(growth int64) string {
 
 // truncateOverlayText ensures overlay text fits within the bar width
 func truncateOverlayText(overlayText string, maxWidth int) string {
-	if lipgloss.Width(overlayText) > maxWidth {
-		return overlayText[:maxWidth]
-	} else if lipgloss.Width(overlayText) < maxWidth {
-		return overlayText + strings.Repeat(" ", maxWidth-lipgloss.Width(overlayText))
+	width := lipgloss.Width(overlayText)
+	if width > maxWidth {
+		return ansi.Truncate(overlayText, maxWidth, "")
+	}
+	if width < maxWidth {
+		return overlayText + strings.Repeat(" ", maxWidth-width)
 	}
 	return overlayText
 }
@@ -388,57 +379,28 @@ func truncateOverlayText(overlayText string, maxWidth int) string {
 func renderColoredBar(segmentList []segment, overlayText string, highlighted bool) string {
 	var result strings.Builder
 	textPos := 0
+	runes := []rune(overlayText)
 
 	for _, seg := range segmentList {
-		var bgColor string
+		normalColor, highlightColor := StatusColors(seg.status)
+		bgColor := normalColor
 		if highlighted {
-			bgColor = highlightColorForStatus(seg.status)
-		} else {
-			bgColor = colorForStatus(seg.status)
+			bgColor = highlightColor
 		}
+		style := lipgloss.NewStyle().
+			Background(lipgloss.Color(bgColor)).
+			Foreground(lipgloss.Color("#000000")).
+			Bold(highlighted)
 
 		// Render this segment with overlay text
-		runes := []rune(overlayText)
 		for i := 0; i < seg.width && textPos < len(runes); i++ {
 			char := string(runes[textPos])
-			styled := lipgloss.NewStyle().
-				Background(lipgloss.Color(bgColor)).
-				Foreground(lipgloss.Color("#000000")).
-				Bold(highlighted).
-				Render(char)
-			result.WriteString(styled)
+			result.WriteString(style.Render(char))
 			textPos++
 		}
 	}
 
 	return result.String()
-}
-
-// highlightColorForStatus returns the lighter background colour used when a range row is highlighted.
-func highlightColorForStatus(status string) string {
-	switch status {
-	case "INIT":
-		return constants.LightGreenColor
-	case "SWAP":
-		return constants.LightRedColor
-	case "UNSWAP":
-		return constants.LightBlueColor
-	default:
-		return constants.LightGrayColor
-	}
-}
-
-func colorForStatus(status string) string {
-	switch status {
-	case "INIT":
-		return constants.GreenColor
-	case "SWAP":
-		return constants.RedColor
-	case "UNSWAP":
-		return constants.BlueColor
-	default:
-		return constants.GrayColor
-	}
 }
 
 func statusSegmentWidth(count int, rangeSize uint64, availableWidth int) int {

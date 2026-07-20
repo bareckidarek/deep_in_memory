@@ -1,8 +1,6 @@
 package render
 
 import (
-	"fmt"
-
 	"charm.land/lipgloss/v2"
 
 	"deep_in_memory/internal/constants"
@@ -47,26 +45,87 @@ func CalculateStatusStats(pd *data.ProcessData) StatusStats {
 	return stats
 }
 
-// HumanBytes formats bytes into a human-readable string.
-func HumanBytes(b int64) string {
-	const unit = constants.BytesPerKilobyte
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	prefix := "kMGTPE"[exp]
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), prefix)
-}
-
 // StyleTitle applies consistent styling to section titles.
 func StyleTitle(title string) string {
 	style := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
+		Background(lipgloss.Color(constants.SectionTitleBgColor)).
+		Foreground(lipgloss.Color(constants.SectionTitleFgColor)).
 		Bold(true)
 	return style.Render(title)
+}
+
+// StatusColors returns normal and highlight colors for a memory status.
+func StatusColors(status string) (string, string) {
+	switch status {
+	case "INIT":
+		return constants.GreenColor, constants.LightGreenColor
+	case "SWAP":
+		return constants.RedColor, constants.LightRedColor
+	case "UNSWAP":
+		return constants.BlueColor, constants.LightBlueColor
+	default:
+		return constants.GrayColor, constants.LightGrayColor
+	}
+}
+
+// PageWindow describes a page-based window over a list.
+type PageWindow struct {
+	StartIdx   int
+	EndIdx     int
+	Page       int
+	TotalPages int
+}
+
+// CalculatePageWindow normalizes page inputs and computes a bounded [start,end) window.
+func CalculatePageWindow(totalItems, pageSize, page int) PageWindow {
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	if totalItems <= 0 {
+		return PageWindow{StartIdx: 0, EndIdx: 0, Page: 0, TotalPages: 1}
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	totalPages := (totalItems + pageSize - 1) / pageSize
+	if page >= totalPages {
+		page = totalPages - 1
+	}
+
+	start := page * pageSize
+	end := start + pageSize
+	if end > totalItems {
+		end = totalItems
+	}
+
+	return PageWindow{
+		StartIdx:   start,
+		EndIdx:     end,
+		Page:       page,
+		TotalPages: totalPages,
+	}
+}
+
+// CalculateScrollWindow computes a bounded [start,end) window for a scrollable list.
+func CalculateScrollWindow(totalItems, startIdx, windowSize int) (int, int) {
+	if totalItems <= 0 {
+		return 0, 0
+	}
+	if windowSize < 1 {
+		windowSize = 1
+	}
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if startIdx >= totalItems {
+		startIdx = totalItems - 1
+	}
+
+	endIdx := startIdx + windowSize
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+
+	return startIdx, endIdx
 }

@@ -56,8 +56,27 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 		return nil, fmt.Errorf("attach clone_exit: %w", err)
 	}
 
+	clone3EnterLink, err := link.Tracepoint("syscalls", "sys_enter_clone3", objs.HandleClone3Enter, nil)
+	if err != nil {
+		cloneEnterLink.Close()
+		cloneExitLink.Close()
+		objs.Close()
+		return nil, fmt.Errorf("attach clone3_enter: %w", err)
+	}
+
+	clone3ExitLink, err := link.Tracepoint("syscalls", "sys_exit_clone3", objs.HandleClone3Exit, nil)
+	if err != nil {
+		cloneEnterLink.Close()
+		cloneExitLink.Close()
+		clone3EnterLink.Close()
+		objs.Close()
+		return nil, fmt.Errorf("attach clone3_exit: %w", err)
+	}
+
 	reader, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
+		clone3ExitLink.Close()
+		clone3EnterLink.Close()
 		cloneExitLink.Close()
 		cloneEnterLink.Close()
 		objs.Close()
@@ -86,6 +105,8 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 
 	cleanup := func() error {
 		reader.Close()
+		clone3ExitLink.Close()
+		clone3EnterLink.Close()
 		cloneExitLink.Close()
 		cloneEnterLink.Close()
 		return objs.Close()

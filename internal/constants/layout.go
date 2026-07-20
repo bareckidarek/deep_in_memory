@@ -32,6 +32,31 @@ const (
 
 	// Display constants
 	StatusLegendWidth = 79 // "██ virtual memory mapping  ██ lazy physical allocation  ██ page-out  ██ page-in" = 59 chars visible
+
+	// Virtual section fixed line accounting
+	VirtualTitleLines         = 1
+	VirtualTitleSpacingLines  = 1
+	VirtualFilterLegendLines  = 1
+	VirtualPaginationInfoLine = 1
+	VirtualReservedFooterLine = 1
+
+	// Minimum spacing between virtual title and legend
+	VirtualTitleLegendMinSpacing = 2
+)
+
+// General UI text constants
+const (
+	HexPrefix                 = "0x"
+	DefaultAddressInputValue  = HexPrefix
+	FilterLabelHeapEmpty      = "[heap+empty]"
+	FilterLabelAll            = "[all]"
+	AddressSuggestionLimit    = 20
+	MarkerDefaultPrefix       = "  "
+	MarkerFocusedPrefix       = "• "
+	MarkerSelectedPrefix      = "► "
+	PhysicalHintTabToFocus    = "  [Tab to focus input]"
+	VirtualFilterToggleHint   = "[press f to toggle filter]"
+	VirtualPagingNavigateHint = "[use p/n to navigate]"
 )
 
 // Event constants for eBPF tracepoints
@@ -83,6 +108,14 @@ const (
 // Modal position constants
 const (
 	ModalTopOffset = 2 // Lines from top of screen
+
+	// Modal styling
+	ModalHorizontalPadding = 5
+	ModalInfoColor         = "12"
+	ModalWarnColor         = "214"
+	ModalErrorColor        = "9"
+	SectionTitleBgColor    = "62"
+	SectionTitleFgColor    = "230"
 )
 
 // Data processing constants

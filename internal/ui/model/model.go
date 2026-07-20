@@ -19,18 +19,25 @@ import (
 
 // Model wraps the Bubble Tea state for the TUI.
 type Model struct {
-	list             list.Model
-	data             data.Dataset
-	selectedPID      int // Process selected with Enter (shows details)
-	focusedPID       int // Process under cursor (arrow navigation)
-	width            int
-	height           int
-	err              error
+	// Process list and dataset state
+	list        list.Model
+	data        data.Dataset
+	selectedPID int // Process selected with Enter (shows details)
+	focusedPID  int // Process under cursor (arrow navigation)
+
+	// Window and error state
+	width  int
+	height int
+	err    error
+
+	// Viewports
 	viewportVirtual  viewport.Model
 	viewportPhysical viewport.Model
 	viewportLogs     viewport.Model
-	setTargetPID     func(int) error
-	rangesPage       int // Current page for virtual ranges pagination (0-indexed)
+
+	// App callbacks and virtual pagination
+	setTargetPID func(int) error
+	rangesPage   int // Current page for virtual ranges pagination (0-indexed)
 
 	// Modal state
 	showModal    bool
@@ -76,10 +83,10 @@ func New(d data.Dataset) *Model {
 
 	ti := textinput.New()
 	ti.Placeholder = "enter hex address..."
-	ti.SetValue("0x")
+	ti.SetValue(constants.DefaultAddressInputValue)
 	ti.CharLimit = 20
 	ti.SetWidth(22)
-	ti.Prompt = "► "
+	ti.Prompt = constants.MarkerSelectedPrefix
 
 	// Apply styles to focused and blurred states
 	styles := ti.Styles()
@@ -120,7 +127,10 @@ func New(d data.Dataset) *Model {
 	l.DisableQuitKeybindings()
 
 	// Set title style to match other section headers
-	l.Styles.Title = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Bold(true)
+	l.Styles.Title = lipgloss.NewStyle().
+		Background(lipgloss.Color(constants.SectionTitleBgColor)).
+		Foreground(lipgloss.Color(constants.SectionTitleFgColor)).
+		Bold(true)
 
 	m.list = l
 
@@ -148,100 +158,126 @@ func (m *Model) Init() tea.Cmd {
 	return nil // App handles log request timing
 }
 
+func (m *Model) handleLogsResponse(msg uimsg.LogsResponseMsg) (tea.Model, tea.Cmd) {
+	m.viewportLogs.SetContent(uirender.RenderLogsSectionContent(msg.Logs, m.viewportLogs.Width(), m.logsWrap))
+	m.cachedLogs = m.viewportLogs.View()
+	m.dirty = true
+	return m, nil
+}
+
+func (m *Model) handleIomemLoad(msg uimsg.IomemLoadResponse) (tea.Model, tea.Cmd) {
+	m.iomemRanges = msg.Ranges
+	m.syncLayout()
+	m.dirty = true
+	return m, nil
+}
+
+func (m *Model) handlePagemapLookup(msg uimsg.PagemapLookupResponse) (tea.Model, tea.Cmd) {
+	m.pagemapResult = msg.Lines
+	m.pagemapPFN = msg.PFN
+	m.pagemapHasPFN = msg.HasPFN
+	if msg.HasPFN {
+		m.physicalScrollOff = 0
+	}
+	m.dirty = true
+	m.syncLayout()
+	return m, nil
+}
+
+func (m *Model) handleClearPhysicalMemory(msg uimsg.ClearPhysicalMemoryMsg) (tea.Model, tea.Cmd) {
+	if m.selectedPID == msg.PID {
+		m.resetPhysicalMemory()
+		m.dirty = true
+		m.syncLayout()
+	}
+	return m, nil
+}
+
+func (m *Model) handleApplicationError(msg uimsg.ApplicationError) (tea.Model, tea.Cmd) {
+	m.showModal = true
+	switch msg.Severity {
+	case "error":
+		m.modalType = constants.ModalTypeError
+	case "warning", "warn":
+		m.modalType = constants.ModalTypeWarn
+	default:
+		m.modalType = constants.ModalTypeInfo
+	}
+	m.modalMessage = msg.Message
+	m.dirty = true
+
+	return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
+		return uimsg.HideModalMsg{}
+	})
+}
+
+func (m *Model) handleHideModal() (tea.Model, tea.Cmd) {
+	m.showModal = false
+	return m, nil
+}
+
+func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if !m.physicalFocused {
+		return m, nil
+	}
+
+	currentVal := m.physicalInput.Value()
+	m.physicalInput.SetValue(currentVal + msg.String())
+	m.physicalInput.CursorEnd()
+	m.updateSuggestions()
+	m.syncLayout()
+	m.dirty = true
+	return m, nil
+}
+
+func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if m.physicalFocused {
+		model, cmd := m.handlePhysicalInput(msg)
+		return model, cmd, true
+	}
+	if handler, ok := m.keyHandlers()[msg.String()]; ok {
+		model, cmd := handler()
+		return model, cmd, true
+	}
+	return m, nil, false
+}
+
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	m.height = msg.Height
+	m.list.SetSize(constants.ListWidthFallback, max(m.height-2, constants.DefaultListHeight))
+	m.dirty = true
+	m.syncLayout()
+	return m, nil
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case uimsg.LogsResponseMsg:
-		// Update logs viewport with received logs
-		m.viewportLogs.SetContent(uirender.RenderLogsSectionContent(msg.Logs, m.viewportLogs.Width(), m.logsWrap))
-		// Cache viewport content and mark dirty
-		m.cachedLogs = m.viewportLogs.View()
-		m.dirty = true
-		return m, nil
+		return m.handleLogsResponse(msg)
 
 	case uimsg.IomemLoadResponse:
-		m.iomemRanges = msg.Ranges
-		m.syncLayout()
-		m.dirty = true
-		return m, nil
+		return m.handleIomemLoad(msg)
 
 	case uimsg.PagemapLookupResponse:
-		m.pagemapResult = msg.Lines
-		m.pagemapPFN = msg.PFN
-		m.pagemapHasPFN = msg.HasPFN
-		// Reset scroll to show highlighted item at top
-		if msg.HasPFN {
-			m.physicalScrollOff = 0
-		}
-		m.dirty = true
-		m.syncLayout()
-		return m, nil
+		return m.handlePagemapLookup(msg)
 
 	case uimsg.ClearPhysicalMemoryMsg:
-		// Clear physical memory state only if it matches the exiting process
-		if m.selectedPID == msg.PID {
-			m.pagemapResult = nil
-			m.pagemapHasPFN = false
-			m.pagemapPFN = 0
-			m.physicalInput.SetValue("0x")
-			m.suggestions = nil
-			m.showSuggestions = false
-			m.selectedSuggestion = -1
-			m.physicalScrollOff = 0
-			// Return focus to process list
-			m.physicalFocused = false
-			m.physicalInput.Blur()
-			m.dirty = true
-			m.syncLayout()
-		}
-		return m, nil
+		return m.handleClearPhysicalMemory(msg)
 
 	case uimsg.ApplicationError:
-		// Show modal based on severity
-		m.showModal = true
-		switch msg.Severity {
-		case "error":
-			m.modalType = constants.ModalTypeError
-		case "warning", "warn":
-			m.modalType = constants.ModalTypeWarn
-		default:
-			m.modalType = constants.ModalTypeInfo
-		}
-		m.modalMessage = msg.Message
-		m.dirty = true
-
-		// Hide modal after configured duration
-		return m, tea.Tick(constants.ModalDisplayDuration, func(time.Time) tea.Msg {
-			return uimsg.HideModalMsg{}
-		})
+		return m.handleApplicationError(msg)
 	case uimsg.HideModalMsg:
-		m.showModal = false
-		return m, nil
+		return m.handleHideModal()
 	case tea.PasteMsg:
-		// Handle paste (Ctrl+V / Cmd+V) when physical input is focused
-		if m.physicalFocused {
-			// PasteMsg contains the pasted text
-			currentVal := m.physicalInput.Value()
-			m.physicalInput.SetValue(currentVal + msg.String())
-			m.physicalInput.CursorEnd()
-			m.updateSuggestions()
-			m.syncLayout()
-			m.dirty = true
-		}
-		return m, nil
+		return m.handlePaste(msg)
 	case tea.KeyPressMsg:
-		// When physical input is focused, route keys there
-		if m.physicalFocused {
-			return m.handlePhysicalInput(msg)
-		}
-		if handler, ok := m.keyHandlers()[msg.String()]; ok {
-			return handler()
+		model, cmd, handled := m.handleKeyPress(msg)
+		if handled {
+			return model, cmd
 		}
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.list.SetSize(constants.ListWidthFallback, max(m.height-2, constants.DefaultListHeight))
-		m.dirty = true
-		m.syncLayout()
+		return m.handleWindowSize(msg)
 	}
 
 	var cmdList tea.Cmd

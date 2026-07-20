@@ -8,29 +8,35 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
 	"deep_in_memory/internal/data/proc"
 	uimsg "deep_in_memory/internal/ui/msg"
 	uirender "deep_in_memory/internal/ui/render"
 )
 
+func parseHexAddress(raw string) (uint64, error) {
+	addrStr := strings.TrimPrefix(raw, constants.HexPrefix)
+	addrStr = strings.TrimPrefix(addrStr, strings.ToUpper(constants.HexPrefix))
+	return strconv.ParseUint(addrStr, 16, 64)
+}
+
+func (m *Model) clearSuggestions() {
+	m.suggestions = nil
+	m.showSuggestions = false
+	m.selectedSuggestion = -1
+}
+
 // handlePhysicalInput processes key events when the physical memory input is focused.
 func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.physicalFocused = false
-		m.physicalInput.Blur()
-		m.showSuggestions = false
-		m.selectedSuggestion = -1
+		m.blurPhysicalInput()
 		m.dirty = true
 		return m, nil
 
 	case "tab":
-		// Toggle focus back to process list
-		m.physicalFocused = false
-		m.physicalInput.Blur()
-		m.showSuggestions = false
-		m.selectedSuggestion = -1
+		m.blurPhysicalInput()
 		m.dirty = true
 		return m, nil
 
@@ -48,10 +54,7 @@ func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "down":
 		if m.showSuggestions && len(m.suggestions) > 0 {
-			m.selectedSuggestion++
-			if m.selectedSuggestion >= len(m.suggestions) {
-				m.selectedSuggestion = 0
-			}
+			m.cycleSuggestion(1)
 			m.syncLayout()
 			m.dirty = true
 			return m, nil
@@ -59,10 +62,7 @@ func (m *Model) handlePhysicalInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "up":
 		if m.showSuggestions && len(m.suggestions) > 0 {
-			m.selectedSuggestion--
-			if m.selectedSuggestion < 0 {
-				m.selectedSuggestion = len(m.suggestions) - 1
-			}
+			m.cycleSuggestion(-1)
 			m.syncLayout()
 			m.dirty = true
 			return m, nil
@@ -91,10 +91,7 @@ func (m *Model) performPagemapLookup() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Parse the virtual address
-	addrStr := strings.TrimPrefix(val, "0x")
-	addrStr = strings.TrimPrefix(addrStr, "0X")
-	vaddr, err := strconv.ParseUint(addrStr, 16, 64)
+	vaddr, err := parseHexAddress(val)
 	if err != nil {
 		m.pagemapResult = []string{"Invalid address: " + val}
 		m.pagemapHasPFN = false
@@ -184,30 +181,27 @@ func (m *Model) buildPhysicalMemoryState(width, height int) uirender.PhysicalMem
 func (m *Model) updateSuggestions() {
 	prefix := m.physicalInput.Value()
 	if len(prefix) < 2 {
-		m.suggestions = nil
-		m.showSuggestions = false
-		m.selectedSuggestion = -1
+		m.clearSuggestions()
 		return
 	}
 
 	if m.selectedPID == 0 {
-		m.suggestions = nil
-		m.showSuggestions = false
+		m.clearSuggestions()
 		return
 	}
 
 	pd, ok := m.data.Processes[m.selectedPID]
 	if !ok || pd == nil {
-		m.suggestions = nil
-		m.showSuggestions = false
+		m.clearSuggestions()
 		return
 	}
 
-	const maxSuggestions = 20
+	maxSuggestions := constants.AddressSuggestionLimit
 
 	// Collect all page-aligned addresses from all ranges that match the prefix
 	var allSuggestions []uirender.SuggestionItem
 	seen := make(map[string]bool)
+	stop := false
 
 	for _, thread := range pd.Threads {
 		for _, r := range thread.Ranges {
@@ -215,22 +209,22 @@ func (m *Model) updateSuggestions() {
 			for _, addr := range addrs {
 				if !seen[addr] {
 					seen[addr] = true
-					// Determine the status of this specific address within the range
-					status := getAddressStatus(addr, r)
+					status := approximateAddressStatus(addr, r)
 					allSuggestions = append(allSuggestions, uirender.SuggestionItem{
 						Address: addr,
 						Status:  status,
 					})
-				}
-				if len(allSuggestions) >= maxSuggestions*2 { // Over-collect then trim
-					break
+					if len(allSuggestions) >= maxSuggestions {
+						stop = true
+						break
+					}
 				}
 			}
-			if len(allSuggestions) >= maxSuggestions*2 {
+			if stop {
 				break
 			}
 		}
-		if len(allSuggestions) >= maxSuggestions*2 {
+		if stop {
 			break
 		}
 	}
@@ -240,37 +234,24 @@ func (m *Model) updateSuggestions() {
 		return allSuggestions[i].Address < allSuggestions[j].Address
 	})
 
-	// Limit to maxSuggestions
-	if len(allSuggestions) > maxSuggestions {
-		allSuggestions = allSuggestions[:maxSuggestions]
-	}
-
 	m.suggestions = allSuggestions
 	m.showSuggestions = len(allSuggestions) > 0
 	m.selectedSuggestion = -1
 }
 
-// getAddressStatus determines the memory status of a specific virtual address within a range.
-// Returns: "" (reserved only), "INIT", "SWAP", or "UNSWAP".
-func getAddressStatus(addrStr string, r data.AddrRange) string {
-	// Parse the address to get the page number offset within the range
-	addrStr = strings.TrimPrefix(addrStr, "0x")
-	addrStr = strings.TrimPrefix(addrStr, "0X")
-	addr, err := strconv.ParseUint(addrStr, 16, 64)
+// approximateAddressStatus returns a best-effort status for an address within a range.
+// It is intentionally approximate because range-level counters do not include per-page offsets.
+func approximateAddressStatus(addrStr string, r data.AddrRange) string {
+	addr, err := parseHexAddress(addrStr)
 	if err != nil {
-		return "" // Reserved only if we can't parse
+		return ""
 	}
 
-	// Check if address is within this range
 	if addr < r.StartVal || addr > r.EndVal {
-		return "" // Outside range
+		return ""
 	}
 
-	// Check statuses in priority order: SWAP > UNSWAP > INIT
-	// (SWAP is most important to highlight)
 	if statusCount := r.Statuses["SWAP"]; statusCount != nil && statusCount.Count > 0 {
-		// For simplicity, assume uniform distribution
-		// In real implementation, would check actual page offsets from address database
 		return "SWAP"
 	}
 	if statusCount := r.Statuses["UNSWAP"]; statusCount != nil && statusCount.Count > 0 {
@@ -280,6 +261,5 @@ func getAddressStatus(addrStr string, r data.AddrRange) string {
 		return "INIT"
 	}
 
-	// No specific status - just reserved
 	return ""
 }

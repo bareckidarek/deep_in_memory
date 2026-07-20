@@ -100,9 +100,11 @@ func (m *Model) refreshList() {
 			// Also clear target PID in eBPF if this was the monitored process
 			if m.setTargetPID != nil {
 				if err := m.setTargetPID(0); err != nil {
+					// Only surface modal when clear operation actually fails.
 					m.showModal = true
 					m.modalType = constants.ModalTypeError
 					m.modalMessage = fmt.Sprintf("Failed to clear target PID in eBPF: %v", err)
+					m.dirty = true
 				}
 			}
 		}

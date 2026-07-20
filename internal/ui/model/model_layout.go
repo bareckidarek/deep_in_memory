@@ -8,6 +8,19 @@ import (
 	uirender "deep_in_memory/internal/ui/render"
 )
 
+func clampMin(value, min int) int {
+	if value < min {
+		return min
+	}
+	return value
+}
+
+func (m *Model) cacheViewportContent() {
+	m.cachedVirtual = m.viewportVirtual.View()
+	m.cachedPhysical = m.viewportPhysical.View()
+	m.cachedLogs = m.viewportLogs.View()
+}
+
 // syncLayout ensures viewport sizes and content stay in sync with current selection and window size.
 func (m *Model) syncLayout() {
 	if m.width == 0 || m.height == 0 {
@@ -39,27 +52,17 @@ func (m *Model) leftPaneWidth() int {
 // layoutMetrics returns key layout values used for routing events and rendering.
 func (m *Model) layoutMetrics() (available, rowHeight, secondRowHeight, barWidth int) {
 	available = m.width - m.leftPaneWidth()
-	if available < constants.MinAvailableWidth {
-		available = constants.MinAvailableWidth
-	}
+	available = clampMin(available, constants.MinAvailableWidth)
 	barWidth = available - constants.BarWidthBuffer
-	if barWidth < constants.MinBarWidth {
-		barWidth = constants.MinBarWidth
-	}
+	barWidth = clampMin(barWidth, constants.MinBarWidth)
 
 	contentHeight := m.height
-	if contentHeight < constants.MinContentHeight {
-		contentHeight = constants.MinContentHeight
-	}
+	contentHeight = clampMin(contentHeight, constants.MinContentHeight)
 	// Virtual memory gets VirtualMemoryPercent%, physical memory gets PhysicalMemoryPercent%
 	rowHeight = (contentHeight * constants.VirtualMemoryPercent) / 100
-	if rowHeight < constants.MinContentHeight {
-		rowHeight = constants.MinContentHeight
-	}
+	rowHeight = clampMin(rowHeight, constants.MinContentHeight)
 	secondRowHeight = contentHeight - rowHeight
-	if secondRowHeight < constants.MinContentHeight {
-		secondRowHeight = constants.MinContentHeight
-	}
+	secondRowHeight = clampMin(secondRowHeight, constants.MinContentHeight)
 
 	return
 }
@@ -130,29 +133,19 @@ func (m *Model) calcViewportDimensions() viewportDimensions {
 	available, rowHeight, secondRowHeight, barWidth := m.layoutMetrics()
 
 	virtualWidth := available - constants.LeftPanePadding
-	if virtualWidth < constants.MinBarWidth {
-		virtualWidth = constants.MinBarWidth
-	}
+	virtualWidth = clampMin(virtualWidth, constants.MinBarWidth)
 
 	halfWidth := available / 2
 	physicalWidth := halfWidth - constants.LeftPanePadding
 	logsWidth := available - halfWidth - constants.LeftPanePadding
 
-	if physicalWidth < constants.MinBarWidth {
-		physicalWidth = constants.MinBarWidth
-	}
-	if logsWidth < constants.MinBarWidth {
-		logsWidth = constants.MinBarWidth
-	}
+	physicalWidth = clampMin(physicalWidth, constants.MinBarWidth)
+	logsWidth = clampMin(logsWidth, constants.MinBarWidth)
 
 	virtualHeight := rowHeight - 2
-	if virtualHeight < constants.MinViewportHeight {
-		virtualHeight = constants.MinViewportHeight
-	}
+	virtualHeight = clampMin(virtualHeight, constants.MinViewportHeight)
 	physicalHeight := secondRowHeight - 2
-	if physicalHeight < constants.MinViewportHeight {
-		physicalHeight = constants.MinViewportHeight
-	}
+	physicalHeight = clampMin(physicalHeight, constants.MinViewportHeight)
 
 	return viewportDimensions{
 		virtualWidth:   virtualWidth,
@@ -193,9 +186,7 @@ func (m *Model) updateViewports(pd *data.ProcessData) {
 	// Logs content is updated via GetLogsMsg timer
 
 	// Cache viewport content for performance
-	m.cachedVirtual = m.viewportVirtual.View()
-	m.cachedPhysical = m.viewportPhysical.View()
-	m.cachedLogs = m.viewportLogs.View()
+	m.cacheViewportContent()
 	m.dirty = true
 }
 
@@ -208,8 +199,6 @@ func (m *Model) clearViewports() {
 	// Don't clear logs - they persist independently of selected process
 
 	// Cache viewport content for performance
-	m.cachedVirtual = m.viewportVirtual.View()
-	m.cachedPhysical = m.viewportPhysical.View()
-	m.cachedLogs = m.viewportLogs.View()
+	m.cacheViewportContent()
 	m.dirty = true
 }

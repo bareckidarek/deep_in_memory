@@ -23,6 +23,18 @@ type BrkProgBrkEvent struct {
 	Comm [16]int8
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	BrkProgMapBrkEntries      = "brk_entries"
+	BrkProgMapEvents          = "events"
+	BrkProgMapTargetPids      = "target_pids"
+	BrkProgProgHandleBrkEnter = "handle_brk_enter"
+	BrkProgProgHandleBrkExit  = "handle_brk_exit"
+	BrkProgVarUnusedEvent     = "unused_event"
+)
+
 // LoadBrkProg returns the embedded CollectionSpec for BrkProg.
 func LoadBrkProg() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_BrkProgBytes)
@@ -43,7 +55,7 @@ func LoadBrkProg() (*ebpf.CollectionSpec, error) {
 //	*BrkProgMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func LoadBrkProgObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func LoadBrkProgObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := LoadBrkProg()
 	if err != nil {
 		return err

@@ -15,9 +15,9 @@ func init() {
 type LabelType int
 
 const (
-    FileBacked LabelType = iota
-    Heap
-    Anonymous
+	FileBacked LabelType = iota
+	Heap
+	Anonymous
 	Stack
 	Empty
 	Other
@@ -52,7 +52,7 @@ type AddrRange struct {
 	Size      uint64
 	PrevSize  uint64 // Size before the most recent resize (0 == no previous size recorded)
 	Statuses  map[string]*StatusCount
-	Label     string    // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
+	Label     string // Optional label like [heap], [stack], [anon: Go: gc bits], etc.
 	LabelType LabelType
 	ChangedAt time.Time // Timestamp of the most recent change to this range (zero = never changed)
 }

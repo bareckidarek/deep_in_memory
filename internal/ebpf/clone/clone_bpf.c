@@ -52,7 +52,6 @@ SEC("tracepoint/syscalls/sys_enter_clone")
 int handle_clone_enter(struct trace_event_raw_sys_enter *ctx) {
     __u64 key = bpf_get_current_pid_tgid();
     __u32 pid = key >> 32;
-    __u32 tid = (__u32)key;
     
     // Check target_pids filter - skip if no target set
     __u8 *exists = bpf_map_lookup_elem(&target_pids, &pid);
@@ -75,20 +74,61 @@ int handle_clone_enter(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_exit_clone")
 int handle_clone_exit(struct trace_event_raw_sys_exit *ctx) {
     __u64 key = bpf_get_current_pid_tgid();
-    __u8 value = 1;
 
     struct clone_event *entry = bpf_map_lookup_elem(&clone_entries, &key);
     if (!entry) {
         return 0;
     }
     
-    entry->tid = (__u64)ctx->ret;
-
-    //bpf_map_update_elem(&target_pids, &entry->tid, &value, BPF_ANY); // Add new thread to target_pids
+    entry->tid = (__u32)ctx->ret;
     
-    // Submit all clone events (both successful and failed)
     submit_event(entry);
     
+    bpf_map_delete_elem(&clone_entries, &key);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_clone3")
+int handle_clone3_enter(struct trace_event_raw_sys_enter *ctx) {
+    __u64 key = bpf_get_current_pid_tgid();
+    __u32 pid = key >> 32;
+
+    __u8 *exists = bpf_map_lookup_elem(&target_pids, &pid);
+    if (!exists) {
+        return 0;
+    }
+
+    struct clone_args args = {};
+    void *user_args = (void *)ctx->args[0];
+    if (bpf_probe_read_user(&args, sizeof(args), user_args) != 0) {
+        return 0;
+    }
+
+    struct clone_event e = {};
+    e.ts = bpf_ktime_get_tai_ns();
+    e.pid = pid;
+    e.tid = (__u32)key;
+    e.clone_flags = args.flags;
+    e.tls = args.tls;
+    bpf_get_current_comm(&e.comm, sizeof(e.comm));
+
+    bpf_map_update_elem(&clone_entries, &key, &e, BPF_ANY);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_clone3")
+int handle_clone3_exit(struct trace_event_raw_sys_exit *ctx) {
+    __u64 key = bpf_get_current_pid_tgid();
+
+    struct clone_event *entry = bpf_map_lookup_elem(&clone_entries, &key);
+    if (!entry) {
+        return 0;
+    }
+
+    entry->tid = (__u32)ctx->ret;
+
+    submit_event(entry);
+
     bpf_map_delete_elem(&clone_entries, &key);
     return 0;
 }

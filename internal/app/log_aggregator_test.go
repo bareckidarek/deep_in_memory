@@ -11,43 +11,41 @@ import (
 func TestNewLogAggregator(t *testing.T) {
 	la := NewLogAggregator()
 	require.NotNil(t, la)
-	assert.Len(t, la.events, 6)
+	assert.Len(t, la.events, 7)
 	assert.Empty(t, la.history)
 	assert.Equal(t, 30, la.maxLogs)
 }
 
 func TestRecord_SingleEvent(t *testing.T) {
 	la := NewLogAggregator()
-	la.Record("mmap", 0x1000, 100, 101)
+	la.Record("mmap", 0x1000, 8*1024*1024, 100, 101)
 
 	assert.Len(t, la.events["mmap"], 1)
-	info := la.events["mmap"][0x1000]
+	info := la.events["mmap"][eventSourceKey{pid: 100, tid: 101}][0x1000]
 	assert.Equal(t, 1, info.count)
-	assert.Equal(t, 101, info.tid)
 }
 
 func TestRecord_SameAddressIncrements(t *testing.T) {
 	la := NewLogAggregator()
-	la.Record("mmap", 0x1000, 100, 101)
-	la.Record("mmap", 0x1000, 100, 102)
+	la.Record("mmap", 0x1000, 4*1024*1024, 100, 101)
+	la.Record("mmap", 0x1000, 4*1024*1024, 100, 102)
 
-	assert.Len(t, la.events["mmap"], 1)
-	info := la.events["mmap"][0x1000]
-	assert.Equal(t, 2, info.count)
-	assert.Equal(t, 102, info.tid) // updated to latest TID
+	assert.Len(t, la.events["mmap"], 2)
+	info := la.events["mmap"][eventSourceKey{pid: 100, tid: 102}][0x1000]
+	assert.Equal(t, 1, info.count)
 }
 
 func TestRecord_DifferentAddresses(t *testing.T) {
 	la := NewLogAggregator()
-	la.Record("mmap", 0x1000, 100, 101)
-	la.Record("mmap", 0x2000, 100, 101)
+	la.Record("mmap", 0x1000, 4*1024*1024, 100, 101)
+	la.Record("mmap", 0x2000, 8*1024*1024, 100, 101)
 
-	assert.Len(t, la.events["mmap"], 2)
+	assert.Len(t, la.events["mmap"], 1)
 }
 
 func TestRecord_UnknownEventType(t *testing.T) {
 	la := NewLogAggregator()
-	la.Record("unknown", 0x1000, 100, 101)
+	la.Record("unknown", 0x1000, 0, 100, 101)
 
 	// Unknown event type should be silently ignored
 	assert.Empty(t, la.events["mmap"])
@@ -55,8 +53,8 @@ func TestRecord_UnknownEventType(t *testing.T) {
 
 func TestFlush_CreatesHistoryAndClearsEvents(t *testing.T) {
 	la := NewLogAggregator()
-	la.Record("mmap", 0x1000, 100, 101)
-	la.Record("brk", 0x2000, 100, 101)
+	la.Record("mmap", 0x1000, 4*1024*1024, 100, 101)
+	la.Record("brk", 0x2000, 0, 100, 101)
 
 	la.Flush([]int{100, 101})
 
@@ -77,10 +75,10 @@ func TestFlush_NoEventNoHistory(t *testing.T) {
 func TestFlush_HistoryNewestFirst(t *testing.T) {
 	la := NewLogAggregator()
 
-	la.Record("mmap", 0x1000, 100, 101)
+	la.Record("mmap", 0x1000, 4*1024*1024, 100, 101)
 	la.Flush([]int{100, 101})
 
-	la.Record("brk", 0x2000, 100, 101)
+	la.Record("brk", 0x2000, 0, 100, 101)
 	la.Flush([]int{100, 101})
 
 	require.Len(t, la.history, 2)
@@ -93,7 +91,7 @@ func TestFlush_MaxLogsLimit(t *testing.T) {
 	la.maxLogs = 3
 
 	for i := 0; i < 5; i++ {
-		la.Record("mmap", uint64(i*0x1000), 100, 101)
+		la.Record("mmap", uint64(i*0x1000), 4*1024*1024, 100, 101)
 		la.Flush([]int{100, 101})
 	}
 
@@ -107,7 +105,7 @@ func TestGetFormattedLogs_Empty(t *testing.T) {
 
 func TestGetFormattedLogs_Format(t *testing.T) {
 	la := NewLogAggregator()
-	la.Record("mmap", 0x1000, 100, 101)
+	la.Record("mmap", 0x1000, 8*1024*1024, 100, 101)
 	la.Flush([]int{100, 101})
 
 	logs := la.GetFormattedLogs()
@@ -116,7 +114,19 @@ func TestGetFormattedLogs_Format(t *testing.T) {
 	assert.Contains(t, logs[0], "TID:101")
 	assert.Contains(t, logs[0], "mmap")
 	assert.Contains(t, logs[0], "count: 1")
-	assert.Contains(t, logs[0], "0x1000")
+	assert.Contains(t, logs[0], "0x1000 [8.0 MB]")
+}
+
+func TestGetFormattedLogs_BrkUnchanged(t *testing.T) {
+	la := NewLogAggregator()
+	la.Record("brk", 0x2000, 0, 100, 101)
+	la.Flush([]int{100, 101})
+
+	logs := la.GetFormattedLogs()
+	require.Len(t, logs, 1)
+	assert.Contains(t, logs[0], "virtual memory mapping [brk]")
+	assert.Contains(t, logs[0], "addresses: 0x2000")
+	assert.NotContains(t, logs[0], "[8.0 MB]")
 }
 
 func TestFormatAddressRanges_Empty(t *testing.T) {
@@ -175,10 +185,13 @@ func TestGetAddresses(t *testing.T) {
 	assert.Equal(t, uint64(0x2000), addrs[1])
 }
 
-func TestGetMostRecentTID(t *testing.T) {
-	m := map[uint64]*eventInfo{
-		0x1000: {count: 1, tid: 42},
+func TestFormatAddressesWithSizes(t *testing.T) {
+	addrs := []uint64{0x2000, 0x1000}
+	sizes := map[uint64]uint64{
+		0x1000: 8 * 1024 * 1024,
+		0x2000: 4 * 1024 * 1024,
 	}
-	assert.Equal(t, 42, getMostRecentTID(m))
-	assert.Equal(t, 0, getMostRecentTID(map[uint64]*eventInfo{}))
+
+	result := formatAddressesWithSizes(addrs, sizes)
+	assert.Equal(t, "0x1000 [8.0 MB], 0x2000 [4.0 MB]", result)
 }

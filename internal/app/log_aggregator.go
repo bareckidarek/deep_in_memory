@@ -6,6 +6,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"deep_in_memory/internal/data"
+
+	"github.com/dustin/go-humanize"
 )
 
 // LogEntry represents a single aggregated log entry with timestamp
@@ -14,6 +18,7 @@ type LogEntry struct {
 	EventType string
 	Count     int
 	Addresses []uint64
+	Sizes     map[uint64]uint64
 	PID       int
 	TID       int
 }
@@ -23,28 +28,33 @@ type LogEntry struct {
 // from eBPF event handlers and UI update goroutines.
 type LogAggregator struct {
 	mu sync.Mutex // Protects all fields below
-	// Map of event type -> (address -> event info with count and TID)
-	events  map[string]map[uint64]*eventInfo
+	// Map of event type -> (pid/tid -> (address -> event info with count))
+	events  map[string]map[eventSourceKey]map[uint64]*eventInfo
 	history []LogEntry // Last N log entries (newest first)
 	maxLogs int
 }
 
+type eventSourceKey struct {
+	pid int
+	tid int
+}
+
 type eventInfo struct {
-	count int
-	tid   int // Last TID that triggered this event
+	count  int
+	length uint64
 }
 
 // NewLogAggregator creates a new log aggregator
 func NewLogAggregator() *LogAggregator {
 	return &LogAggregator{
-		events: map[string]map[uint64]*eventInfo{
-			"brk":        make(map[uint64]*eventInfo),
-			"mmap":       make(map[uint64]*eventInfo),
-			"munmap":     make(map[uint64]*eventInfo),
-			"clone":      make(map[uint64]*eventInfo),
-			"init":       make(map[uint64]*eventInfo),
-			"swap_write": make(map[uint64]*eventInfo),
-			"swap_read":  make(map[uint64]*eventInfo),
+		events: map[string]map[eventSourceKey]map[uint64]*eventInfo{
+			"brk":        make(map[eventSourceKey]map[uint64]*eventInfo),
+			"mmap":       make(map[eventSourceKey]map[uint64]*eventInfo),
+			"munmap":     make(map[eventSourceKey]map[uint64]*eventInfo),
+			"clone":      make(map[eventSourceKey]map[uint64]*eventInfo),
+			"init":       make(map[eventSourceKey]map[uint64]*eventInfo),
+			"swap_write": make(map[eventSourceKey]map[uint64]*eventInfo),
+			"swap_read":  make(map[eventSourceKey]map[uint64]*eventInfo),
 		},
 		history: make([]LogEntry, 0, 30),
 		maxLogs: 30,
@@ -53,16 +63,25 @@ func NewLogAggregator() *LogAggregator {
 
 // Record adds an event to the aggregator for the given PID and TID.
 // Thread-safe: can be called concurrently from multiple eBPF event handlers.
-func (la *LogAggregator) Record(eventType string, addr uint64, pid, tid int) {
+func (la *LogAggregator) Record(eventType string, addr, length uint64, pid, tid int) {
 	la.mu.Lock()
 	defer la.mu.Unlock()
 
 	if eventMap, ok := la.events[eventType]; ok {
-		if info, exists := eventMap[addr]; exists {
+		sourceKey := eventSourceKey{pid: pid, tid: tid}
+		addrMap, exists := eventMap[sourceKey]
+		if !exists {
+			addrMap = make(map[uint64]*eventInfo)
+			eventMap[sourceKey] = addrMap
+		}
+
+		if info, exists := addrMap[addr]; exists {
 			info.count++
-			info.tid = tid // Update to latest TID
+			if length > 0 {
+				info.length = length
+			}
 		} else {
-			eventMap[addr] = &eventInfo{count: 1, tid: tid}
+			addrMap[addr] = &eventInfo{count: 1, length: length}
 		}
 	}
 }
@@ -72,24 +91,26 @@ func (la *LogAggregator) Record(eventType string, addr uint64, pid, tid int) {
 func (la *LogAggregator) Flush(pids []int) {
 	la.mu.Lock()
 	defer la.mu.Unlock()
+	_ = pids
 
 	now := time.Now()
 
 	// Process all event types
-	for eventType, addrMap := range la.events {
-		if len(addrMap) > 0 {
-			for _, pid := range pids {
+	for eventType, bySource := range la.events {
+		if len(bySource) > 0 {
+			for source, addrMap := range bySource {
 				la.addToHistoryLocked(LogEntry{
 					Timestamp: now,
 					EventType: eventType,
 					Count:     sumCounts(addrMap),
 					Addresses: getAddresses(addrMap),
-					PID:       pid,
-					TID:       getMostRecentTID(addrMap),
+					Sizes:     getAddressSizes(addrMap),
+					PID:       source.pid,
+					TID:       source.tid,
 				})
 			}
 			// Clear the map for this event type
-			la.events[eventType] = make(map[uint64]*eventInfo)
+			la.events[eventType] = make(map[eventSourceKey]map[uint64]*eventInfo)
 		}
 	}
 }
@@ -142,10 +163,22 @@ func (la *LogAggregator) GetFormattedLogs() []string {
 	lines := make([]string, len(la.history))
 	for i, entry := range la.history {
 		timestamp := entry.Timestamp.Format("2006-01-02 15:04:05")
-		addrStr := formatAddressRanges(entry.Addresses)
+		// addresses are not available for clone events, so we display "n/a" in that case
+		addrStr := "n/a"
+		if entry.EventType != "clone" {
+			if entry.EventType == "mmap" || entry.EventType == "munmap" {
+				addrStr = formatAddressesWithSizes(entry.Addresses, entry.Sizes)
+			} else {
+				addrStr = formatAddressRanges(entry.Addresses)
+			}
+		}
+		countStr := fmt.Sprintf("%d", entry.Count)
+		if entry.EventType == "init" || entry.EventType == "swap_write" || entry.EventType == "swap_read" {
+			countStr = fmt.Sprintf("%d [%s]", entry.Count, humanize.IBytes(uint64(entry.Count)*data.PageSizeBytes))
+		}
 		displayType := formatEventType(entry.EventType)
-		lines[i] = fmt.Sprintf("%s | PID:%d, TID:%d | %s -> count: %d, addresses: %s",
-			timestamp, entry.PID, entry.TID, displayType, entry.Count, addrStr)
+		lines[i] = fmt.Sprintf("%s | PID:%d, TID:%d | %s -> count: %s, addresses: %s",
+			timestamp, entry.PID, entry.TID, displayType, countStr, addrStr)
 	}
 	return lines
 }
@@ -167,13 +200,12 @@ func getAddresses(m map[uint64]*eventInfo) []uint64 {
 	return addrs
 }
 
-func getMostRecentTID(m map[uint64]*eventInfo) int {
-	// Return the TID from any event (they should all be from the same process)
-	// If events come from multiple threads, return the last one we saw
-	for _, info := range m {
-		return info.tid
+func getAddressSizes(m map[uint64]*eventInfo) map[uint64]uint64 {
+	sizes := make(map[uint64]uint64, len(m))
+	for addr, info := range m {
+		sizes[addr] = info.length
 	}
-	return 0
+	return sizes
 }
 
 // formatAddressRanges converts addresses into ranges when they are adjacent
@@ -219,4 +251,28 @@ func formatAddressRanges(addrs []uint64) string {
 	}
 
 	return strings.Join(result, ", ")
+}
+
+func formatAddressesWithSizes(addrs []uint64, sizes map[uint64]uint64) string {
+	if len(addrs) == 0 {
+		return ""
+	}
+
+	sorted := make([]uint64, len(addrs))
+	copy(sorted, addrs)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
+	})
+
+	parts := make([]string, 0, len(sorted))
+	for _, addr := range sorted {
+		length := sizes[addr]
+		if length == 0 {
+			parts = append(parts, fmt.Sprintf("0x%x", addr))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("0x%x [%s]", addr, humanize.IBytes(length)))
+	}
+
+	return strings.Join(parts, ", ")
 }

@@ -23,6 +23,20 @@ type CloneProgCloneEvent struct {
 	Comm       [16]int8
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	CloneProgMapCloneEntries       = "clone_entries"
+	CloneProgMapEvents             = "events"
+	CloneProgMapTargetPids         = "target_pids"
+	CloneProgProgHandleClone3Enter = "handle_clone3_enter"
+	CloneProgProgHandleClone3Exit  = "handle_clone3_exit"
+	CloneProgProgHandleCloneEnter  = "handle_clone_enter"
+	CloneProgProgHandleCloneExit   = "handle_clone_exit"
+	CloneProgVarUnusedEvent        = "unused_event"
+)
+
 // LoadCloneProg returns the embedded CollectionSpec for CloneProg.
 func LoadCloneProg() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_CloneProgBytes)
@@ -43,7 +57,7 @@ func LoadCloneProg() (*ebpf.CollectionSpec, error) {
 //	*CloneProgMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func LoadCloneProgObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func LoadCloneProgObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := LoadCloneProg()
 	if err != nil {
 		return err
@@ -65,8 +79,10 @@ type CloneProgSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type CloneProgProgramSpecs struct {
-	HandleCloneEnter *ebpf.ProgramSpec `ebpf:"handle_clone_enter"`
-	HandleCloneExit  *ebpf.ProgramSpec `ebpf:"handle_clone_exit"`
+	HandleClone3Enter *ebpf.ProgramSpec `ebpf:"handle_clone3_enter"`
+	HandleClone3Exit  *ebpf.ProgramSpec `ebpf:"handle_clone3_exit"`
+	HandleCloneEnter  *ebpf.ProgramSpec `ebpf:"handle_clone_enter"`
+	HandleCloneExit   *ebpf.ProgramSpec `ebpf:"handle_clone_exit"`
 }
 
 // CloneProgMapSpecs contains maps before they are loaded into the kernel.
@@ -129,12 +145,16 @@ type CloneProgVariables struct {
 //
 // It can be passed to LoadCloneProgObjects or ebpf.CollectionSpec.LoadAndAssign.
 type CloneProgPrograms struct {
-	HandleCloneEnter *ebpf.Program `ebpf:"handle_clone_enter"`
-	HandleCloneExit  *ebpf.Program `ebpf:"handle_clone_exit"`
+	HandleClone3Enter *ebpf.Program `ebpf:"handle_clone3_enter"`
+	HandleClone3Exit  *ebpf.Program `ebpf:"handle_clone3_exit"`
+	HandleCloneEnter  *ebpf.Program `ebpf:"handle_clone_enter"`
+	HandleCloneExit   *ebpf.Program `ebpf:"handle_clone_exit"`
 }
 
 func (p *CloneProgPrograms) Close() error {
 	return _CloneProgClose(
+		p.HandleClone3Enter,
+		p.HandleClone3Exit,
 		p.HandleCloneEnter,
 		p.HandleCloneExit,
 	)

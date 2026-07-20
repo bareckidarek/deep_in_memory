@@ -81,13 +81,13 @@ func (pd *ProcessData) ExtendBrkRange(tid int, brk uint64, ret uint64) {
 		if heapIdx == -1 {
 			// Create initial heap range (start == end == ret)
 			newRange := AddrRange{
-				Start:    fmt.Sprintf("%x", ret),
-				End:      fmt.Sprintf("%x", ret),
-				StartVal: ret,
-				EndVal:   ret,
-				Size:     0,
-				Statuses: make(map[string]*StatusCount),
-				Label:    "[heap]",
+				Start:     fmt.Sprintf("%x", ret),
+				End:       fmt.Sprintf("%x", ret),
+				StartVal:  ret,
+				EndVal:    ret,
+				Size:      0,
+				Statuses:  make(map[string]*StatusCount),
+				Label:     "[heap]",
 				LabelType: Heap,
 			}
 			pd.Threads[threadIdx].Ranges = append(pd.Threads[threadIdx].Ranges, newRange)
@@ -172,16 +172,42 @@ func (pd *ProcessData) RemoveMmapRange(tid int, addr uint64, length uint64) {
 			continue
 		}
 
-		// Find and remove overlapping ranges
-		newRanges := []AddrRange{}
+		// Trim or split overlapping ranges based on the unmapped subrange.
+		newRanges := make([]AddrRange, 0, len(th.Ranges))
 		for _, r := range th.Ranges {
-			// Check if range overlaps with munmap region
-			if r.StartVal < endAddr && r.EndVal > addr {
-				// This range overlaps, skip it (remove it)
+			// No overlap: keep as-is.
+			if r.StartVal >= endAddr || r.EndVal <= addr {
+				newRanges = append(newRanges, r)
 				continue
 			}
-			newRanges = append(newRanges, r)
+
+			// Overlap exists. Keep left segment if any: [r.StartVal, addr).
+			if r.StartVal < addr {
+				left := r
+				left.EndVal = addr
+				left.End = fmt.Sprintf("%x", left.EndVal)
+				left.Size = (left.EndVal - left.StartVal) / PageSizeBytes
+				left.PrevSize = left.Size
+				left.ChangedAt = time.Now()
+				// Page-status counts are no longer exact after partial unmap.
+				left.Statuses = make(map[string]*StatusCount)
+				newRanges = append(newRanges, left)
+			}
+
+			// Keep right segment if any: [endAddr, r.EndVal).
+			if r.EndVal > endAddr {
+				right := r
+				right.StartVal = endAddr
+				right.Start = fmt.Sprintf("%x", right.StartVal)
+				right.Size = (right.EndVal - right.StartVal) / PageSizeBytes
+				right.PrevSize = right.Size
+				right.ChangedAt = time.Now()
+				// Page-status counts are no longer exact after partial unmap.
+				right.Statuses = make(map[string]*StatusCount)
+				newRanges = append(newRanges, right)
+			}
 		}
+		SortRanges(newRanges)
 		pd.Threads[i].Ranges = newRanges
 		// Invalidate cache for this thread
 		pd.invalidateRangeCache(tid)

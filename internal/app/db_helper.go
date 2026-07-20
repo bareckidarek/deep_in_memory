@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -137,9 +136,7 @@ func (h *DBHelper) HandleProcessExit(ev uimsg.ProcessExit) error {
 
 func (h *DBHelper) HandleCloneEvent(ev uimsg.ProcessClone) error {
 
-	log.Printf("Clone event: PID=%d, TID=%d, CloneFlags=%d, TLS=%d", ev.PID, ev.TID, ev.CloneFlags, ev.TLS)
-
-	if(ev.CloneFlags & 0x00010000 == 0) {  // 0x00010000 is CLONE_THREAD
+	if ev.CloneFlags&0x00010000 == 0 { // if CLONE_THREAD (0x00010000) is not set, this is a new process, not a thread
 		record := &data.ProcessData{
 			Proc: data.Process{
 				PID:       ev.TID,
@@ -216,7 +213,7 @@ func (h *DBHelper) HandleBrkEvent(ev uimsg.ProcessBrk) error {
 	}
 
 	// Update ProcessData - extend brk range
-	record.ExtendBrkRange(ev.TID, ev.Brk, ev.Ret)
+	record.ExtendBrkRange(ev.PID, ev.Brk, ev.Ret)
 
 	// Save ProcessData (no Value, just structure)
 	if err := h.db.Upsert(pidKey(ev.PID), record); err != nil {
@@ -284,7 +281,11 @@ func (h *DBHelper) HandlePagingEvent(ev uimsg.ProcessInitSwapUnswap) error {
 // updatePageStatus handles the shared logic for page fault and swap events:
 // finds the process and range, updates the address database, syncs counts, and saves.
 func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	record, err := h.getProcess(pid)
+
 	if err != nil {
 		return fmt.Errorf("failed to get process %d: %w", pid, err)
 	}
@@ -296,6 +297,7 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	// Calculate page address and offset
 	pageAddr := (address / data.PageSizeBytes) * data.PageSizeBytes
 	r := record.FindRangeForAddr(tid, pageAddr)
+
 	if r == nil {
 		// If not found for TID, try to find for pid (in case of shared memory or brk)
 		r = record.FindRangeForAddr(pid, pageAddr)
@@ -321,7 +323,7 @@ func (h *DBHelper) updatePageStatus(pid, tid int, address uint64, status string)
 	}
 
 	// --- UPDATE MAIN DATABASE ---
-	counts := addrData.GetStatusCounts(tid, r.StartVal)
+	counts := addrData.GetStatusCounts(0, r.StartVal) // Get counts for all threads for this range
 	if r.Statuses == nil {
 		r.Statuses = make(map[string]*data.StatusCount)
 	}

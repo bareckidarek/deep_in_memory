@@ -110,7 +110,7 @@ func (m *Model) updateUI(msg tea.Msg) tea.Cmd {
 // handleTracedEvent enqueues an eBPF event for async DB processing.
 // The DB write happens in the background goroutine — Update() never blocks on BoltDB.
 // Logging happens immediately (logs don't depend on DB state).
-func (m *Model) handleTracedEvent(pid int, handler func(*DBHelper) error, logType string, logAddr uint64, tid int) (tea.Model, tea.Cmd) {
+func (m *Model) handleTracedEvent(pid int, handler func(*DBHelper) error, logType string, logAddr, logLen uint64, tid int) (tea.Model, tea.Cmd) {
 	found := false
 	for _, target := range m.targetPIDs {
 		if target == pid {
@@ -122,7 +122,7 @@ func (m *Model) handleTracedEvent(pid int, handler func(*DBHelper) error, logTyp
 		return m, nil
 	}
 	m.asyncWriter.Enqueue(pid, handler)
-	m.logAggregator.Record(logType, logAddr, pid, tid)
+	m.logAggregator.Record(logType, logAddr, logLen, pid, tid)
 	return m, nil
 }
 
@@ -172,16 +172,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.updateUI(uimsg.ClearPhysicalMemoryMsg{PID: v.PID})
 
 	case uimsg.ProcessClone:
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleCloneEvent(v) }, "clone", 0, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleCloneEvent(v) }, "clone", 0, 0, v.TID)
 
 	case uimsg.ProcessMmap:
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMmapEvent(v) }, "mmap", v.Addr, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMmapEvent(v) }, "mmap", v.Addr, v.Len, v.TID)
 
 	case uimsg.ProcessMunmap:
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMunmapEvent(v) }, "munmap", v.Addr, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleMunmapEvent(v) }, "munmap", v.Addr, v.Len, v.TID)
 
 	case uimsg.ProcessBrk:
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleBrkEvent(v) }, "brk", v.Ret, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandleBrkEvent(v) }, "brk", v.Ret, 0, v.TID)
 
 	case uimsg.ProcessInitSwapUnswap:
 		logType := ""
@@ -193,7 +193,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case 2:
 			logType = "swap_read"
 		}
-		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandlePagingEvent(v) }, logType, v.Address, v.TID)
+		return m.handleTracedEvent(v.PID, func(h *DBHelper) error { return h.HandlePagingEvent(v) }, logType, v.Address, 0, v.TID)
 
 	case uimsg.LoadSmapsRequest:
 		// Read /proc smaps synchronously (fast I/O), queue DB write async
