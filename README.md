@@ -9,8 +9,6 @@ deep_in_memory is an interactive Linux TUI that combines eBPF tracing with /proc
 - lazy page allocation, page-out to swap, and page-in from swap
 - virtual address to PFN lookup with /proc/iomem correlation
 
-This is not just another top-like monitor. It is a memory behavior microscope.
-
 ## Why use it
 
 - End-to-end visibility: from kernel hook to human-readable terminal output.
