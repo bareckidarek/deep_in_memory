@@ -1,0 +1,40 @@
+kind: playground
+name: deep-in-memory-playground-9e44e7c9
+base: docker
+title: deep_in_memory tutorial
+description: A Linux server with Docker engine pre-installed & tools to run deep_in_memory tutorial.
+categories:
+    - linux
+    - programming
+    - observability
+playground:
+    networks:
+        - name: local
+          subnet: 172.16.0.0/24
+    machines:
+        - name: docker-01
+          users:
+            - name: root
+            - name: laborant
+              default: true
+          drives:
+            - source: oci://ghcr.io/bareckidarek/deep_in_memory_playground:1.4
+              mount: /
+          network:
+            interfaces:
+                - network: local
+          resources:
+            cpuCount: 4
+            ramSize: 10GiB
+    tabs:
+        - id: terminal-docker-01
+          kind: terminal
+          name: Term
+          machine: docker-01
+    accessControl:
+        canList:
+            - anyone
+        canRead:
+            - anyone
+        canStart:
+            - anyone

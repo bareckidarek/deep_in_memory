@@ -1,0 +1,4 @@
+2026-07-31
+- Initial version of the iximiuz tutorial authoring skill.
+- Added end-to-end instructions for front matter, playground, tasks, and MDC components.
+- Added reusable tutorial scaffold template at templates/index.md.template.

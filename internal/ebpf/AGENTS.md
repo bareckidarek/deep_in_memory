@@ -3,7 +3,7 @@
 ## Package Overview
 
 `internal/ebpf` and its sub-packages implement all kernel-level event collection via eBPF.
-The root package provides shared infrastructure (`CentralEventCollector`, `SharedState`, `ProcessEventsBatched`).
+The root package provides shared infrastructure (`CentralEventCollector`, `SharedState`, `ProcessEventsBatched`) and works with domain events defined in `internal/event`.
 Each sub-package attaches its own tracepoints or kprobes and streams typed events to the collector.
 
 **Package layout:**
@@ -12,17 +12,17 @@ Each sub-package attaches its own tracepoints or kprobes and streams typed event
 |---------|------------|----------------|
 | `internal/ebpf` | — | Infrastructure only |
 | `internal/ebpf/sched` | `sched_process_exec`, `sched_process_exit` tracepoints | `ProcessExec`, `ProcessExit` |
-| `internal/ebpf/clone` | `sys_enter_clone`, `sys_exit_clone` tracepoints | `ProcessClone` |
+| `internal/ebpf/clone` | `sys_enter_clone`, `sys_exit_clone`, `sys_enter_clone3`, `sys_exit_clone3` tracepoints | `ProcessClone` |
 | `internal/ebpf/mmap` | `sys_enter_mmap`, `sys_exit_mmap`, `sys_enter_munmap`, `sys_exit_munmap` tracepoints | `ProcessMmap`, `ProcessMunmap` |
 | `internal/ebpf/brk` | `sys_enter_brk`, `sys_exit_brk` tracepoints | `ProcessBrk` |
-| `internal/ebpf/paging` | `do_anonymous_page`, `do_swap_page` kprobes + `swap_writepage` kprobe | `ProcessInitSwapUnswap` |
+| `internal/ebpf/paging` | `do_anonymous_page`, `do_swap_page`, `swap_writepage` kprobe+kretprobe pairs | `ProcessInitSwapUnswap` |
 
 ---
 
 ## Build tags
 
 Every real collector file has `//go:build ebpf` at the top. Each sub-package also ships a
-`collector_stub.go` with `//go:build !ebpf` that provides a no-op `Start` returning an error.
+`collector_stub.go` with `//go:build !ebpf` that provides a `Start` stub returning an error.
 This lets the entire test suite compile and run without the `ebpf` tag or root privileges.
 
 ```
@@ -56,23 +56,23 @@ make generate  # go generate ./...
 ## CentralEventCollector
 
 Defined in `event_collector.go`. Collects events from all sub-collectors and flushes them
-in **chronological order** (sorted by `TimestampedEvent.GetTimestamp()`) to Bubble Tea.
+in **chronological order** (sorted by `TimestampedEvent.GetTimestamp()`) to the app-layer adapter.
 
 ```go
 collector := ebpf.NewCentralEventCollector(
-    p.Send,
+        batchSend,
     constants.EventBatchSize,          // max events before forced flush
     constants.EventBatchFlushInterval, // periodic flush interval
 )
 ```
 
 - `AddEvent(event TimestampedEvent)` — called from each sub-collector goroutine; thread-safe.
-- Flush sends a `[]interface{}` batch message to Bubble Tea. `app.Update` handles `[]interface{}` by
-  iterating and dispatching each element individually.
+- Flush sends a typed `[]event.TimestampedEvent` batch to the app-layer adapter. Bubble Tea stays at
+    the wiring boundary in `cmd/deep_in_memory`.
 - `Stop()` — cancels the flush loop and performs a final flush.
 
-**Critical:** Do not bypass `CentralEventCollector` by calling `p.Send` directly from secondary
-collectors. Only `sched` sends directly (exec/exit events are not batched through the collector).
+**Critical:** Do not bypass `CentralEventCollector` by wiring secondary collectors directly to UI logic.
+Only `sched` sends individual domain events directly to the app-layer adapter (exec/exit events are not batched through the collector).
 
 ---
 
@@ -100,7 +100,7 @@ Defined in `helpers.go`. Used by `clone`, `mmap`, `brk`, and `paging` collectors
 func ProcessEventsBatched[T any](
     ctx context.Context,
     reader *ringbuf.Reader,
-    processor EventProcessor[T],   // func(T) tea.Msg
+    processor EventProcessor[T],   // func(T) event.TimestampedEvent
     collector *CentralEventCollector,
 ) {
     // reads ring buffer, deserializes T, calls processor, adds to collector
@@ -129,8 +129,9 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 }
 ```
 
-The `sched` collector differs: it sends events directly via `p.Send` (not through `CentralEventCollector`)
-because exec/exit events must reach the app immediately and do not need timestamp-ordering with paging events.
+The `sched` collector differs: it sends events directly to the app-layer adapter (not through
+`CentralEventCollector`) because exec/exit events must reach the app immediately and do not need
+timestamp-ordering with paging events.
 
 The `clone` collector correlates `sys_enter_clone` and `sys_exit_clone` via its `clone_entries` map and emits
 `uimsg.ProcessClone` with the returned thread/process ID in the `TID` field.
@@ -141,14 +142,14 @@ The `clone` collector correlates `sys_enter_clone` and `sys_exit_clone` via its 
 
 | File | Kernel hooks | Map types used |
 |------|-------------|----------------|
-| `sched/sched_bpf.c` | `sched_process_exec`, `sched_process_exit` | `BPF_MAP_TYPE_RINGBUF`, `BPF_MAP_TYPE_ARRAY` (target_pid) |
-| `clone/clone_bpf.c` | `sys_enter_clone`, `sys_exit_clone` | `RINGBUF`, `HASH` (target_pids), `HASH` (enter→exit correlation) |
-| `mmap/mmap_bpf.c` | `sys_enter/exit_mmap`, `sys_enter/exit_munmap` | `RINGBUF`, `ARRAY` (target_pid), `HASH` (enter→exit correlation) |
-| `brk/brk_bpf.c` | `sys_enter/exit_brk` | `RINGBUF`, `ARRAY` (target_pid), `HASH` (enter→exit correlation) |
-| `paging/paging_bpf.c` | `do_anonymous_page`, `do_swap_page`, `swap_writepage` kprobes/kretprobes | `RINGBUF`, `ARRAY` (target_pid) |
+| `sched/sched_bpf.c` | `sched_process_exec`, `sched_process_exit` | `BPF_MAP_TYPE_RINGBUF`, `BPF_MAP_TYPE_HASH` (target_pids) |
+| `clone/clone_bpf.c` | `sys_enter/exit_clone`, `sys_enter/exit_clone3` | `RINGBUF`, `HASH` (target_pids), `HASH` (enter→exit correlation) |
+| `mmap/mmap_bpf.c` | `sys_enter/exit_mmap`, `sys_enter/exit_munmap` | `RINGBUF`, `HASH` (target_pids), `HASH` (enter→exit correlation) |
+| `brk/brk_bpf.c` | `sys_enter/exit_brk` | `RINGBUF`, `HASH` (target_pids), `HASH` (enter→exit correlation) |
+| `paging/paging_bpf.c` | `do_anonymous_page`, `do_swap_page`, `swap_writepage` kprobes/kretprobes | `RINGBUF`, `HASH` (target_pids), `HASH` (enter→exit correlation) |
 
 All C sources include `vmlinux.h` (generated by `make prepare`) and use CO-RE (`bpf_core_read.h`).
-Timestamps use `bpf_ktime_get_tai_ns()` for wall-clock accuracy.
+Timestamps use `bpf_ktime_get_tai_ns()` in sched/clone/mmap/brk and `bpf_ktime_get_ns()` in paging.
 
 ---
 
@@ -156,16 +157,8 @@ Timestamps use `bpf_ktime_get_tai_ns()` for wall-clock accuracy.
 
 eBPF collectors must not crash the application. Treat any `Start()` error as degraded mode:
 
-```go
-cleanup, state, err := sched.Start(ctx, p.Send)
-if err != nil {
-    p.Send(uimsg.ApplicationError{
-        Message:  fmt.Sprintf("Failed to start sched: %v. Running without eBPF tracing.", err),
-        Severity: "warning",
-    })
-    // continue — TUI still runs for process listing
-}
-```
+In `cmd/deep_in_memory/main.go`, startup errors are turned into `uimsg.ApplicationError` messages and
+the TUI continues in degraded mode.
 
 Secondary collectors (`clone`, `mmap`, `brk`, `paging`) are started in a loop in `startCollectors`; each
 failure is independently reported as a warning, and successful collectors continue running.

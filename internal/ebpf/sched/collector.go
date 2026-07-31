@@ -10,19 +10,18 @@ import (
 	"fmt"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
 	"deep_in_memory/internal/constants"
 	ebpfshared "deep_in_memory/internal/ebpf"
-	uimsg "deep_in_memory/internal/ui/msg"
+	"deep_in_memory/internal/event"
 )
 
 // Start attaches sched tracepoints and streams events to the provided send function.
 // Caller must cancel the context to stop the reader; the returned cleanup closes resources.
 // Returns a SharedState for thread-safe access to target PID and cleanup function.
-func Start(ctx context.Context, send func(tea.Msg)) (func() error, interface{}, error) {
+func Start(ctx context.Context, send func(event.TimestampedEvent)) (func() error, interface{}, error) {
 	var objs SchedProgObjects
 	if err := LoadSchedProgObjects(&objs, nil); err != nil {
 		return nil, nil, fmt.Errorf("load BPF objects: %w", err)
@@ -79,9 +78,9 @@ func Start(ctx context.Context, send func(tea.Msg)) (func() error, interface{}, 
 			ts := time.Unix(0, int64(e.Ts))
 			switch e.Type {
 			case 1:
-				send(uimsg.ProcessExec{Timestamp: ts, PID: int(e.Pid), Comm: cString(e.Comm[:])})
+				send(event.ProcessExec{Timestamp: ts, PID: int(e.Pid), Comm: cString(e.Comm[:])})
 			case 2:
-				send(uimsg.ProcessExit{Timestamp: ts, PID: int(e.Pid), Comm: cString(e.Comm[:])})
+				send(event.ProcessExit{Timestamp: ts, PID: int(e.Pid), Comm: cString(e.Comm[:])})
 			}
 		}
 	}()

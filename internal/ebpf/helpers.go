@@ -7,14 +7,15 @@ import (
 	"errors"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/cilium/ebpf/ringbuf"
 
 	"deep_in_memory/internal/constants"
+	"deep_in_memory/internal/event"
 )
 
-// EventProcessor defines how to process a single eBPF event
-type EventProcessor[T any] func(event T) tea.Msg
+// EventProcessor converts a raw eBPF event of type T into a domain event.
+// Return nil to skip the event (e.g. unknown event type).
+type EventProcessor[T any] func(raw T) event.TimestampedEvent
 
 // ProcessEventsBatched implements event processing with batching optimization.
 // Collects events into batches before sending to reduce message passing overhead.
@@ -48,18 +49,16 @@ func ProcessEventsBatched[T any](
 			continue
 		}
 
-		var event T
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
+		var raw T
+		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &raw); err != nil {
 			// Binary deserialization failed - skip this event but continue processing others
 			// This prevents a single corrupt event from stopping the entire collector
 			continue
 		}
 
-		msg := processor(event)
-
-		// Add to central collector if it's a timestamped event
-		if tsEvent, ok := any(msg).(interface{ GetTimestamp() time.Time }); ok {
-			collector.AddEvent(tsEvent)
+		ev := processor(raw)
+		if ev != nil {
+			collector.AddEvent(ev)
 		}
 	}
 }

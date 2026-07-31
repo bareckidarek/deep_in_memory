@@ -76,13 +76,13 @@ EnqueueExit(pid, ...)   // 1. marks PID dead in exitedPIDs map — future Enqueu
 | `HandleMmapEvent` | `uimsg.ProcessMmap` | Calls `AddMmapRange` on existing process |
 | `HandleMunmapEvent` | `uimsg.ProcessMunmap` | Calls `RemoveMmapRange` |
 | `HandleBrkEvent` | `uimsg.ProcessBrk` | Calls `ExtendBrkRange` |
-| `HandleSwapEvent` | `uimsg.ProcessInitSwapUnswap` | Updates `AddressData` offsets + mirrors counts to `ProcessData` |
+| `HandlePagingEvent` | `uimsg.ProcessInitSwapUnswap` | Updates `AddressData` offsets + mirrors counts to `ProcessData` |
 
 `HandleCloneEvent` splits behavior by `CloneFlags`:
 1. No `CLONE_THREAD` bit → create a new `ProcessData` record keyed by the returned child PID/TID.
-2. `CLONE_THREAD` set → read `/proc/PID/task/TID/smaps`, then `AppendThread` to the existing selected process.
+2. `CLONE_THREAD` set → read `/proc/TID/smaps` (filtered against main process ranges), then `AppendThread` to the existing selected process.
 
-`HandleSwapEvent` is the only handler that writes to **both** databases. It:
+`HandlePagingEvent` is the only handler that writes to **both** databases. It:
 1. Calls `AddPageOffset` on `AddressData` (address DB).
 2. Uses `FindRangeForAddr` on the process record to mirror the count increment back into `ProcessData.Statuses`.
 3. Upserts both records.
@@ -99,6 +99,8 @@ Supported event types: `brk`, `mmap`, `munmap`, `clone`, `init`, `swap_write`, `
 - `Flush(pids)` — called on each `uimsg.GetLogsMsg` tick (`constants.LogFlushInterval`), converts aggregated
   counts into `[]LogEntry` history (newest-first, max 30 entries).
 - `GetFormattedLogs()` — returns formatted `[]string` sent to UI via `uimsg.LogsResponseMsg`.
+
+Note: `Flush(pids)` currently ignores its `pids` parameter and flushes all aggregated sources.
 
 Display names for event types:
 
@@ -148,11 +150,12 @@ functions with multiple input/output cases.
 
 ## Adding a new event type
 
-1. Add a new `uimsg.SomeEvent` type to `internal/ui/msg/msg.go` (implement `TimestampedEvent`).
-2. Add a handler method `DBHelper.HandleSomeEvent(ev uimsg.SomeEvent) error` in `db_helper.go`.
-3. Handle the message in `app.go` `Update()` using `handleTracedEvent` (if PID-gated) or `asyncWriter.Enqueue`.
-4. Add the new event type key to `LogAggregator.events` in `log_aggregator.go` if it should appear in logs.
-5. Write tests for the handler in `db_helper_test.go`.
+1. Add a new domain event type to `internal/event`.
+2. If the event must flow through Bubble Tea, add a type alias for it in `internal/ui/msg/msg.go`.
+3. Add a handler method `DBHelper.HandleSomeEvent(ev uimsg.SomeEvent) error` in `db_helper.go`.
+4. Handle the message in `app.go` `Update()` using `handleTracedEvent` (if PID-gated) or `asyncWriter.Enqueue`.
+5. Add the new event type key to `LogAggregator.events` in `log_aggregator.go` if it should appear in logs.
+6. Write tests for the handler in `db_helper_test.go`.
 
 ---
 

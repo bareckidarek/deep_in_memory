@@ -7,13 +7,12 @@ import (
 	"fmt"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
 	ebpfshared "deep_in_memory/internal/ebpf"
-	uimsg "deep_in_memory/internal/ui/msg"
+	"deep_in_memory/internal/event"
 )
 
 // Start attaches brk tracepoints and streams events to the central event collector.
@@ -64,9 +63,9 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 	}
 
 	// Use batched event processing for low-frequency brk events
-	processor := func(e BrkProgBrkEvent) tea.Msg {
+	processor := func(e BrkProgBrkEvent) event.TimestampedEvent {
 		ts := time.Unix(0, int64(e.Ts))
-		return uimsg.ProcessBrk{
+		return event.ProcessBrk{
 			Timestamp: ts,
 			PID:       int(e.Pid),
 			TID:       int(e.Tid),

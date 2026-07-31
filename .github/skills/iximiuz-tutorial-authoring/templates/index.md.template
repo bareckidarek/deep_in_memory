@@ -1,0 +1,86 @@
+---
+kind: tutorial
+
+title: |-
+  <Tutorial Title>
+
+description: |-
+  <Short tutorial summary and outcomes>
+
+categories:
+  - linux
+
+tagz:
+  - tutorial-docs
+
+createdAt: 2026-07-31
+updatedAt: 2026-07-31
+
+cover: __static__/cover.png
+
+playground:
+  name: <playground-name>
+  tabs:
+    - name: main
+      kind: terminal
+      title: main
+      machine: <machine-name>
+
+tasks:
+  init_setup:
+    init: true
+    machine: <machine-name>
+    user: laborant
+    run: |
+      echo "setup complete"
+
+  verify_step_1:
+    machine: <machine-name>
+    run: |
+      test -f /tmp/step-1.txt
+---
+
+# <Tutorial heading>
+
+Intro and learning goals.
+
+## Step 1
+
+Go to :tab{text='main' name='main'} and run:
+
+```shell
+echo hello > /tmp/step-1.txt
+```
+
+::simple-task
+---
+:tasks: tasks
+:name: verify_step_1
+---
+#active
+Create `/tmp/step-1.txt` in the main terminal.
+
+#completed
+Step 1 completed.
+::
+
+## Optional hint
+
+::hint-box
+---
+:summary: Hint 1
+---
+Use `ls /tmp` to verify the file exists.
+::
+
+## Visual explanation
+
+::image-box
+---
+:src: __static__/architecture.png
+:alt: 'Architecture overview'
+:max-width: 1000px
+:margin: 0px auto
+:padding: 10px
+---
+::

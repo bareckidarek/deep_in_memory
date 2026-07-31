@@ -6,9 +6,7 @@ import (
 	"sync"
 	"time"
 
-	uimsg "deep_in_memory/internal/ui/msg"
-
-	tea "charm.land/bubbletea/v2"
+	"deep_in_memory/internal/event"
 )
 
 // CentralEventCollector collects events from all eBPF collectors and batches them
@@ -17,8 +15,8 @@ import (
 // can be interleaved in time and must be processed in timestamp order.
 type CentralEventCollector struct {
 	mu            sync.Mutex
-	events        []uimsg.TimestampedEvent
-	send          func(tea.Msg)
+	events        []event.TimestampedEvent
+	send          func([]event.TimestampedEvent)
 	batchSize     int
 	flushInterval time.Duration
 	ctx           context.Context
@@ -26,13 +24,14 @@ type CentralEventCollector struct {
 }
 
 // NewCentralEventCollector creates a new centralized event collector.
-// batchSize: maximum number of events to collect before flushing
-// flushInterval: maximum time to wait before flushing collected events
-func NewCentralEventCollector(send func(tea.Msg), batchSize int, flushInterval time.Duration) *CentralEventCollector {
+// batchSize: maximum number of events to collect before flushing.
+// flushInterval: maximum time to wait before flushing collected events.
+// send: callback invoked with each sorted batch; must be non-blocking.
+func NewCentralEventCollector(send func([]event.TimestampedEvent), batchSize int, flushInterval time.Duration) *CentralEventCollector {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	collector := &CentralEventCollector{
-		events:        make([]uimsg.TimestampedEvent, 0, batchSize),
+		events:        make([]event.TimestampedEvent, 0, batchSize),
 		send:          send,
 		batchSize:     batchSize,
 		flushInterval: flushInterval,
@@ -48,11 +47,11 @@ func NewCentralEventCollector(send func(tea.Msg), batchSize int, flushInterval t
 
 // AddEvent adds a timestamped event to the collector.
 // Thread-safe and can be called from multiple collector goroutines.
-func (c *CentralEventCollector) AddEvent(event uimsg.TimestampedEvent) {
+func (c *CentralEventCollector) AddEvent(ev event.TimestampedEvent) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.events = append(c.events, event)
+	c.events = append(c.events, ev)
 
 	// Flush if batch is full
 	if len(c.events) >= c.batchSize {
@@ -60,7 +59,7 @@ func (c *CentralEventCollector) AddEvent(event uimsg.TimestampedEvent) {
 	}
 }
 
-// flushLoop periodically flushes collected events
+// flushLoop periodically flushes collected events.
 func (c *CentralEventCollector) flushLoop() {
 	ticker := time.NewTicker(c.flushInterval)
 	defer ticker.Stop()
@@ -95,14 +94,12 @@ func (c *CentralEventCollector) flushLocked() {
 		return c.events[i].GetTimestamp().Before(c.events[j].GetTimestamp())
 	})
 
-	// Convert to []interface{} for the batch
-	batch := make([]interface{}, len(c.events))
-	for i, event := range c.events {
-		batch[i] = event
-	}
+	// Copy the sorted batch before resetting the buffer
+	batch := make([]event.TimestampedEvent, len(c.events))
+	copy(batch, c.events)
 
 	// Send the sorted batch
-	c.send(tea.Msg(batch))
+	c.send(batch)
 
 	// Clear events while keeping capacity
 	c.events = c.events[:0]

@@ -23,6 +23,7 @@ import (
 	"deep_in_memory/internal/ebpf/mmap"
 	"deep_in_memory/internal/ebpf/paging"
 	"deep_in_memory/internal/ebpf/sched"
+	"deep_in_memory/internal/event"
 	storedb "deep_in_memory/internal/thirdparty/db"
 	uimsg "deep_in_memory/internal/ui/msg"
 )
@@ -52,20 +53,27 @@ func main() {
 	appModel := app.New(store, addressStore, initial, constants.DefaultRefreshInterval)
 	p := tea.NewProgram(appModel)
 
+	// batchSend bridges domain event batches from CentralEventCollector into Bubble Tea.
+	// The eBPF layer stays free of bubbletea; only this wiring layer knows about p.Send.
+	batchSend := func(batch []event.TimestampedEvent) { p.Send(batch) }
+
 	// Create central event collector for maintaining chronological order of events
 	// This collector receives events from all eBPF collectors and sorts them by timestamp
 	// before sending to the application, ensuring proper event ordering across different
 	// event types (page_fault, swap, mmap, brk)
 	eventCollector := ebpfshared.NewCentralEventCollector(
-		p.Send,
+		batchSend,
 		constants.EventBatchSize,
 		constants.EventBatchFlushInterval,
 	)
 	defer eventCollector.Stop()
 
+	// schedSend bridges individual sched domain events into Bubble Tea.
+	schedSend := func(ev event.TimestampedEvent) { p.Send(ev) }
+
 	// Start sched collector and get the shared state
 	var sharedState *ebpfshared.SharedState
-	schedCleanup, stateInterface, err := sched.Start(ctx, p.Send)
+	schedCleanup, stateInterface, err := sched.Start(ctx, schedSend)
 	if err != nil {
 		// Send error to UI and continue without eBPF functionality
 		p.Send(uimsg.ApplicationError{

@@ -79,8 +79,8 @@ Manages a special `[heap]` range:
 
 ### `RemoveMmapRange(tid int, addr uint64, length uint64)`
 
-Removes all ranges that **overlap** with `[addr, addr+length)`. Uses inclusive start / exclusive end
-comparison: `r.StartVal < endAddr && r.EndVal > addr`.
+Trims or splits ranges that overlap with `[addr, addr+length)` (inclusive start / exclusive end). It preserves
+non-overlapping segments and clears page-status counts for newly trimmed segments because old counts are no longer exact.
 
 ---
 
@@ -122,7 +122,7 @@ page counts from `Rss:` / `Swap:` lines via `parseKBToPages`.
 
 ### LoadSmapsRangesForThread(pid int, tid int) ([]AddrRange, error)
 
-Reads `/proc/PID/task/TID/smaps` for a specific task created through `clone(CLONE_THREAD, ...)`.
+Reads `/proc/TID/smaps` for a specific task created through `clone(CLONE_THREAD, ...)`.
 Used by `internal/app.DBHelper.HandleCloneEvent` to append a new thread view to an existing process.
 
 **Label extraction rules (`extractLabel`):**
@@ -130,8 +130,8 @@ Used by `internal/app.DBHelper.HandleCloneEvent` to append a new thread view to 
 - Empty remainder → `LabelType=Empty`, `Label=""`.
 - Contains `[heap]` → `LabelType=Heap`.
 - Contains `[stack]` → `LabelType=Stack`.
-- Any other `[`-prefixed label (including `[anon: ...]`) → `LabelType=Other`.
-- Non-bracketed label containing `anon` → `LabelType=Anonymous`.
+- Contains `anon` (including bracketed forms like `[anon: ...]`) → `LabelType=Anonymous`.
+- Any other `[`-prefixed label → `LabelType=Other`.
 - `/`-prefixed label → `LabelType=FileBacked`.
 - Numeric-only remainder → `LabelType=Anonymous`.
 - Fallback → `LabelType=Other`.

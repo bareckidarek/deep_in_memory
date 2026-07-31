@@ -7,13 +7,12 @@ import (
 	"fmt"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
 	ebpfshared "deep_in_memory/internal/ebpf"
-	uimsg "deep_in_memory/internal/ui/msg"
+	"deep_in_memory/internal/event"
 )
 
 // Start attaches paging kprobes and streams events to the central event collector.
@@ -106,12 +105,12 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 	}
 
 	// Use batched event processing for high-frequency swap events
-	processor := func(e PagingProgPagingEvent) tea.Msg {
+	processor := func(e PagingProgPagingEvent) event.TimestampedEvent {
 		ts := time.Unix(0, int64(e.Ts))
 
 		switch e.Type {
 		case 0: // do_anonymous_page
-			return uimsg.ProcessInitSwapUnswap{
+			return event.ProcessInitSwapUnswap{
 				Timestamp: ts,
 				PID:       int(e.Pid),
 				TID:       int(e.Tid),
@@ -122,7 +121,7 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 		case 1: // swap_writepage
 			// Need to add three zeros at the end (shift left by 12 bits = multiply by 4096)
 			addr := e.Addr << 12
-			return uimsg.ProcessInitSwapUnswap{
+			return event.ProcessInitSwapUnswap{
 				Timestamp: ts,
 				PID:       int(e.Pid),
 				TID:       int(e.Tid),
@@ -131,7 +130,7 @@ func Start(ctx context.Context, collector *ebpfshared.CentralEventCollector, sha
 				ErrorCode: e.Ret,
 			}
 		case 2: // do_swap_page
-			return uimsg.ProcessInitSwapUnswap{
+			return event.ProcessInitSwapUnswap{
 				Timestamp: ts,
 				PID:       int(e.Pid),
 				TID:       int(e.Tid),
