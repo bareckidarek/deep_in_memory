@@ -8,7 +8,7 @@
 |---------|----------------|
 | `internal/ui/model` | Stateful Bubble Tea model — owns layout, keyboard handling, viewport management, pagemap lookups |
 | `internal/ui/render` | **Side-effect-free** render helpers — pure functions that produce styled strings |
-| `internal/ui/msg` | All Bubble Tea message types and the `TimestampedEvent` interface |
+| `internal/ui/msg` | Bubble Tea message types plus aliases for domain events from `internal/event` |
 
 ---
 
@@ -16,7 +16,7 @@
 
 `msg.go` defines every message that flows through the Bubble Tea program.
 
-### eBPF-originated events (implement `TimestampedEvent`)
+### eBPF-originated events (defined in `internal/event`, aliased here)
 
 | Type | Source | Fields |
 |------|--------|--------|
@@ -38,7 +38,7 @@
 | `IomemRangeMsg` | Carries parsed `/proc/iomem` ranges to the UI model |
 | `HideModalMsg{}` | Dismisses the notification modal after `constants.ModalDisplayDuration` |
 | `ClearPhysicalMemoryMsg{PID}` | Resets physical memory panel when a process exits |
-| `ApplicationError{Message, Severity}` | Displays a warning or error modal; severity: `"warning"` or `"error"` |
+| `ApplicationError{Message, Severity}` | Displays a modal; supported severities map to info/warn/error (`"warning"`, `"warn"`, `"error"`, default=`"info"`) |
 
 ---
 
@@ -76,7 +76,7 @@ Heights: `VirtualMemoryPercent = 55%`, `PhysicalMemoryPercent = 45%` of availabl
 | `↑` / `↓` | Navigate process list |
 | `Enter` | Select process → sets target PID in eBPF, loads smaps, shows info modal |
 | `n` / `p` | Next/previous page of virtual memory ranges |
-| `tab` | Toggle focus to/from physical memory address input |
+| `tab` | Focus physical memory address input |
 | `j` / `k` | Scroll `/proc/iomem` matches in the physical memory panel |
 | `w` | Toggle word-wrap in logs panel |
 | `f` | Toggle virtual-range `LabelType` filter: `Heap`+`Empty` only vs. all label types |
@@ -168,8 +168,8 @@ error=red(9).
 
 ## Testing
 
-The render and msg packages contain no test files (pure functions / type definitions).
-The model package has no dedicated unit tests — model behavior is covered by integration in `internal/app`.
+The render and msg packages currently contain no test files (pure functions / type definitions).
+The model package currently has no dedicated unit tests.
 
 ```bash
 go test ./internal/ui/...
@@ -179,9 +179,9 @@ go test ./internal/ui/...
 
 ## Adding a new UI message
 
-1. Add the type to `internal/ui/msg/msg.go`.
-2. If it carries eBPF event data, implement `GetTimestamp() time.Time`.
-3. Handle it in `internal/app/app.go` `Update()`.
+1. Add the type to `internal/ui/msg/msg.go` for UI-only messages.
+2. If it carries eBPF event data, add the canonical type to `internal/event` and alias it from `internal/ui/msg/msg.go`.
+3. If it is a UI-only message, handle it in `internal/app/app.go` `Update()`.
 4. If the UI model needs to react, also handle it in `internal/ui/model/model.go` `Update()`.
 
 ## Adding a new render helper

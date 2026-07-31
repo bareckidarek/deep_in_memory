@@ -1,188 +1,132 @@
 # deep_in_memory
 
-A Linux terminal UI for real-time tracing and visualization of process lifecycle and memory operations — `clone`, `brk`, `mmap` / `munmap`, page faults, and swap — for a selected process.
+See what is really happening inside process memory while your application is running under load.
 
-Built with eBPF for zero-overhead kernel tracing and a Bubble Tea TUI for interactive exploration.
+deep_in_memory is an interactive Linux TUI that combines eBPF tracing with /proc insights to show, in real time:
 
----
+- process and thread lifecycle
+- mmap and munmap activity, plus heap changes through brk
+- lazy page allocation, page-out to swap, and page-in from swap
+- virtual address to PFN lookup with /proc/iomem correlation
 
-## What it does
+This is not just another top-like monitor. It is a memory behavior microscope.
 
-`deep_in_memory` attaches eBPF probes to key kernel functions and syscalls, captures every memory event for a target process, and presents the data in a live terminal dashboard:
+## Why use it
 
-- **Virtual memory panel** — every `mmap`/`munmap` and `brk` range, paginated, with per-range status bars showing reservation vs. allocation vs. swap; by default it shows only `Heap` and unlabeled (`Empty`) ranges, with a toggle to reveal all `LabelType` values
-- **Physical memory panel** — look up any virtual address to get its page frame number (PFN) and cross-reference it against `/proc/iomem` hardware ranges
-- **Log panel** — aggregated event stream with counts and address ranges per event type, including process/thread cloning
-
-When the selected process creates additional tasks or subprocesses through `clone(2)`, the app distinguishes them:
-
-- `CLONE_THREAD` updates the selected process with an additional task/thread snapshot loaded from `/proc/PID/task/TID/smaps`
-- clone without `CLONE_THREAD` creates a separate child process entry in the process list
-
----
+- End-to-end visibility: from kernel hook to human-readable terminal output.
+- Practical debugging: quickly spot mmap churn, heap growth patterns, and swap pressure.
+- Local and lightweight: no GUI dependency, no telemetry, works well over SSH.
+- Reliable event flow: collector output is batched and timestamp-sorted to reduce interpretation races.
 
 ## Preview
 
-![docs/preview.png](docs/preview.png)
+![TUI preview](docs/preview.png)
 
+## What you see in the UI
 
----
+1. Process list
+- Live process lifecycle with target PID selection.
+
+2. Virtual memory panel
+- mmap and munmap ranges plus heap brk updates, with range pagination and status counters.
+- Default filter shows Heap plus Empty ranges; press one key to reveal all label types.
+
+3. Physical memory panel
+- Enter a virtual address, read pagemap PFN data, and match it against /proc/iomem ranges.
+
+4. Logs panel
+- Aggregated stream of mmap, munmap, brk, clone, init, swap_write, and swap_read events with counts and addresses.
+
+## Quick start
+
+Requirements:
+
+- Linux on amd64
+- Kernel 5.8 or newer with BTF support at /sys/kernel/btf/vmlinux
+- Root privileges or CAP_BPF plus CAP_PERFMON
+
+Build and run:
+
+```bash
+# Debian/Ubuntu
+apt-get install -y bpftool clang llvm libbpf-dev
+
+make prepare
+make generate
+make build
+
+sudo ./deep_in_memory
+```
+
+Optional profiling:
+
+```bash
+DEBUG=true sudo ./deep_in_memory
+```
+
+## Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| Up / Down | Navigate process list |
+| Enter | Select process and start tracing |
+| n / p | Next or previous virtual memory page |
+| Tab | Focus physical memory input |
+| Enter in input | Run pagemap lookup for current address |
+| j / k | Scroll /proc/iomem matches |
+| w | Toggle log line wrapping |
+| f | Toggle range filter: heap+empty or all |
+| q / Ctrl+C | Quit |
 
 ## Traced events
 
-| Kernel hook | Event type | What it captures |
-|-------------|-----------|-----------------|
-| `sched_process_exec` tracepoint | `ProcessExec` | New process started |
-| `sched_process_exit` tracepoint | `ProcessExit` | Process exited |
-| `sys_[enter/exit]_clone` tracepoints | `ProcessClone` | Thread/task creation or child process creation |
-| `sys_[enter/exit]_mmap` tracepoints | `ProcessMmap` | `mmap` syscall — new virtual range |
-| `sys_[enter/exit]_munmap` tracepoints | `ProcessMunmap` | `munmap` syscall — range freed |
-| `sys_[enter/exit]_brk` tracepoints | `ProcessBrk` | `brk` syscall — heap grow/shrink |
-| `do_anonymous_page` kprobe | `INIT` status | Page lazily allocated (first write fault) |
-| `swap_writepage` kprobe | `SWAP` status | Page evicted to swap |
-| `do_swap_page` kprobe | `UNSWAP` status | Page read back from swap |
+| Kernel hook | Event | Meaning |
+|---|---|---|
+| sched_process_exec | ProcessExec | Process started |
+| sched_process_exit | ProcessExit | Process exited |
+| sys_enter and sys_exit for clone and clone3 | ProcessClone | Thread or child process creation |
+| sys_enter and sys_exit for mmap | ProcessMmap | New virtual memory range |
+| sys_enter and sys_exit for munmap | ProcessMunmap | Range unmapped |
+| sys_enter and sys_exit for brk | ProcessBrk | Heap boundary change |
+| do_anonymous_page | INIT | First page allocation fault |
+| swap_writepage | SWAP | Page evicted to swap |
+| do_swap_page | UNSWAP | Page read back from swap |
 
----
+## Architecture in 20 seconds
 
-## Requirements
-
-| Requirement | Details |
-|-------------|---------|
-| OS | Linux only |
-| Kernel | ≥ 5.8 with BTF support (`/sys/kernel/btf/vmlinux` must exist) |
-| Privileges | `CAP_BPF` + `CAP_PERFMON`, or `root` |
-| Architecture | `amd64` |
-
----
-
-## Installation
-
-### From source (host build)
-
-```bash
-# Build dependencies (Debian/Ubuntu)
-apt-get install -y bpftool clang llvm libbpf-dev
-
-# Clone and build
-git clone https://github.com/your-org/deep_in_memory
-cd deep_in_memory
-
-make prepare   # generates vmlinux.h from running kernel
-make generate  # generates eBPF Go bindings
-make build     # produces ./deep_in_memory binary
+```text
+eBPF collectors (sched/clone/mmap/brk/paging)
+        -> internal/event domain types
+        -> CentralEventCollector (batch + timestamp sort)
+        -> app.Model (event routing)
+        -> AsyncDBWriter (single goroutine for all writes)
+        -> deep_in_memory.db (ProcessData)
+        -> deep_in_memory_addresses.db (AddressData)
+        -> data.BuildDataset -> TUI refresh
 ```
 
-### Docker
+Most important behavior: events from different collectors are ordered by timestamp before processing, and all BoltDB writes are serialized through one queue. The canonical event types live in `internal/event` and are re-exported by `internal/ui/msg` for the Bubble Tea boundary.
+
+## Docker
 
 ```bash
 docker build -t deep_in_memory .
 ```
 
-The multi-stage Dockerfile handles all build dependencies automatically and produces a minimal
-`distroless/static-debian12` image. The container still requires `--privileged` (or `CAP_BPF` +
-`CAP_PERFMON`) and `/sys/kernel/btf/vmlinux` bind-mounted from the host at runtime.
-
----
-
-## Usage
-
-```bash
-# Run (requires root or CAP_BPF + CAP_PERFMON)
-sudo ./deep_in_memory
-
-# Enable pprof profiling on port 8080
-DEBUG=true sudo ./deep_in_memory
-```
-
-Files created in the working directory:
-
-| File | Contents |
-|------|---------|
-| `deep_in_memory.log` | Application log (errors, warnings) |
-| `deep_in_memory.db` | Process/range state (deleted on startup) |
-| `deep_in_memory_addresses.db` | Per-page offset detail (deleted on startup) |
-
-### Keyboard shortcuts
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Navigate process list |
-| `Enter` | Select process and start tracing |
-| `n` / `p` | Next / previous page of virtual memory ranges |
-| `Tab` | Focus physical memory address input |
-| `Enter` (in input) | Look up page frame number for address |
-| `↑` / `↓` (in input) | Navigate address suggestions |
-| `j` / `k` | Scroll `/proc/iomem` matches in the physical memory panel |
-| `w` | Toggle word-wrap in logs panel |
-| `f` | Toggle virtual-range filter: `Heap` + `Empty` only / all `LabelType` values |
-| `q` / `Ctrl+C` | Quit |
-
-The virtual memory panel shows a filter legend in-place: `Filter: [heap+empty]` by default, `Filter: [all]` after pressing `f`.
-
----
-
-## Architecture
-
-```
-eBPF collectors (sched / clone / mmap / brk / paging)
-        │  emit TimestampedEvent
-        ▼
-CentralEventCollector      ← batches events, sorts by timestamp
-        │
-        ▼
-app.Model  (Bubble Tea)    ← routes events
-        │
-        ▼
-AsyncDBWriter              ← single goroutine, all BoltDB writes
-        │
-        ├──► deep_in_memory.db          (ProcessData — ranges + counts)
-        └──► deep_in_memory_addresses.db (AddressData — per-page offsets)
-                │
-        periodic reload → data.BuildDataset → TUI refresh
-```
-
-Events from multiple collectors are interleaved in real time. `CentralEventCollector` buffers them and
-flushes sorted batches to the Bubble Tea program, ensuring `do_anonymous_page` events are always processed
-after their parent `mmap` event regardless of which goroutine wins the race.
-
-Traced events are gated by the currently selected PID: `clone`, `mmap`, `brk`, and paging activity are only
-persisted and shown for the selected process, while broad lifecycle events like `exec`/`exit` continue to feed
-the process list.
-
----
-
-## Tech stack
-
-| Component | Library |
-|-----------|---------|
-| eBPF | [cilium/ebpf](https://github.com/cilium/ebpf) |
-| TUI framework | [charm.land/bubbletea/v2](https://charm.land/bubbletea/v2) |
-| TUI components | [charm.land/bubbles/v2](https://charm.land/bubbles/v2) |
-| TUI styling | [charm.land/lipgloss/v2](https://charm.land/lipgloss/v2) |
-| Embedded DB | [bbolt](https://github.com/etcd-io/bbolt) + [bolthold](https://github.com/timshannon/bolthold) |
-| Serialization | [msgpack v5](https://github.com/vmihailenco/msgpack) |
-| Language | Go 1.26.4 |
-
----
+The container still needs eBPF privileges and host kernel data access.
 
 ## Development
 
 ```bash
-make fmt       # go fmt ./...
-make test      # full test suite with coverage
-make build     # binary (requires Linux with BTF)
+make fmt
+make test
+make build
 ```
 
-Tests run without eBPF or root privileges — stub files provide no-op collectors for the test build:
+Tests do not require the ebpf build tag or root:
 
 ```bash
-go test ./...   # no -tags ebpf needed
+go test ./...
 ```
 
-See [AGENTS.md](AGENTS.md) for full developer and agent documentation.
-
----
-
-## License
-
-See [LICENSE](LICENSE).
+Contributor and agent details: [AGENTS.md](AGENTS.md)

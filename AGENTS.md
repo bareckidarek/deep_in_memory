@@ -8,7 +8,7 @@ presents results in an interactive Bubble Tea terminal interface.
 
 **Key technologies:**
 
-- **Go 1.26.4** — primary language
+- **Go 1.26.5** — primary language
 - **eBPF** ([cilium/ebpf](https://github.com/cilium/ebpf)) — kernel tracing via tracepoints and kprobes
 - **Bubble Tea v2** (`charm.land/bubbletea/v2`) — TUI framework
 - **Bubbles v2** (`charm.land/bubbles/v2`) — TUI component library
@@ -133,6 +133,7 @@ AsyncDBWriter                  ← serializes ALL BoltDB writes (single backgrou
 | `internal/app/log_aggregator.go` | Aggregates eBPF events for the selected PID into TUI log panel |
 | `internal/data` | Data types, `BuildDataset`, range mutation, `RangeCache` lookups |
 | `internal/data/proc` | `/proc` readers: `smaps`, `pagemap`, `iomem` |
+| `internal/event` | Domain event types shared between eBPF collectors and the application layer |
 | `internal/ebpf` | `CentralEventCollector`, `SharedState` (shared eBPF map for target PID) |
 | `internal/ebpf/sched` | Tracepoints: `sched_process_exec`, `sched_process_exit` |
 | `internal/ebpf/clone` | Tracepoints: `sys_enter_clone`, `sys_exit_clone` |
@@ -141,7 +142,7 @@ AsyncDBWriter                  ← serializes ALL BoltDB writes (single backgrou
 | `internal/ebpf/paging` | Kprobes: `do_anonymous_page`, `do_swap_page`, `swap_writepage` |
 | `internal/ui/model` | Bubble Tea TUI model (process list, virtual/physical panels, logs) |
 | `internal/ui/render` | **Side-effect-free** render helpers; no timers or DB calls |
-| `internal/ui/msg` | All Bubble Tea message types and `TimestampedEvent` interface |
+| `internal/ui/msg` | Bubble Tea message types plus aliases for domain events from `internal/event` |
 | `internal/constants` | Layout, timing, and eBPF constants |
 | `internal/thirdparty/db` | Thin BoltDB wrapper (generic `Db[T]` interface) |
 
@@ -156,8 +157,8 @@ AsyncDBWriter                  ← serializes ALL BoltDB writes (single backgrou
   to guarantee the PID is marked dead before the delete is queued.
 
 ### Event ordering
-- `CentralEventCollector` sorts batched events by timestamp before the app processes them.
-- Do not bypass it by sending events directly to the Bubble Tea `Send` function from secondary collectors.
+- `CentralEventCollector` sorts batched domain events by timestamp before the app processes them.
+- Do not bypass it by wiring secondary collectors directly to UI logic; keep Bubble Tea at the composition root in `cmd/deep_in_memory`.
 
 ### Data layer isolation
 - `internal/data` must have **no UI imports** (no `internal/ui/*` dependencies).

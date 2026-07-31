@@ -10,6 +10,7 @@ import (
 	"deep_in_memory/internal/constants"
 	"deep_in_memory/internal/data"
 	"deep_in_memory/internal/data/proc"
+	"deep_in_memory/internal/event"
 	storedb "deep_in_memory/internal/thirdparty/db"
 	uimodel "deep_in_memory/internal/ui/model"
 	uimsg "deep_in_memory/internal/ui/msg"
@@ -131,10 +132,10 @@ func (m *Model) handleTracedEvent(pid int, handler func(*DBHelper) error, logTyp
 // Handles process lifecycle events, memory operations, and periodic refresh.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
-	case []interface{}:
-		// Handle batched events from eBPF collectors
-		for _, batchedMsg := range v {
-			m.Update(batchedMsg)
+	case []event.TimestampedEvent:
+		// Handle batched events from eBPF collectors (sorted by timestamp)
+		for _, ev := range v {
+			m.Update(ev)
 		}
 		return m, nil
 

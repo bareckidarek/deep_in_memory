@@ -6,10 +6,10 @@ import (
 	"context"
 	"errors"
 
-	tea "charm.land/bubbletea/v2"
+	"deep_in_memory/internal/event"
 )
 
 // Start is a stub when eBPF build tag is not enabled or eBPF assets are missing.
-func Start(_ context.Context, _ func(tea.Msg)) (func() error, interface{}, error) {
+func Start(_ context.Context, _ func(event.TimestampedEvent)) (func() error, interface{}, error) {
 	return func() error { return nil }, nil, errors.New("eBPF support not built; run go generate ./internal/ebpf/sched and build with -tags ebpf")
 }
