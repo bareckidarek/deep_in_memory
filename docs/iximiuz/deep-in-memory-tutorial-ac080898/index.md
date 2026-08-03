@@ -2,7 +2,7 @@
 kind: tutorial
 
 title: |-
-  deep_in_memory tutorial
+  How Linux Manages Process Memory (A Deep Dive with deep_in_memory)
 
 description: |-
   This tutorial shows how to use deep_in_memory tool to dynamically observe memory usage and memory activity in Linux processes
@@ -586,3 +586,9 @@ New regions appear in the virtual memory panel as threads allocate. Page faults 
 
 After the threads free their memory, `munmap` events are recorded and the allocated regions disappear from the virtual memory panel.
 This behavior closely mirrors `test_clone_mmap shared_thread` — at the kernel level, pthreads and `clone()` with full sharing flags are the same mechanism.
+
+---
+
+## References
+
+- **deep_in_memory source code:** [github.com/bareckidarek/deep_in_memory](https://github.com/bareckidarek/deep_in_memory)
