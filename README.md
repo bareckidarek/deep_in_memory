@@ -4,15 +4,19 @@ See what is really happening inside process memory while your application is run
 
 **deep\_in\_memory** is a Linux terminal user interface (TUI) utility designed to help understand how the Linux kernel manages process memory. It provides a real-time visualization of key memory lifecycle events, including virtual address space reservations, page faults, physical page allocation, and swap activity. The tool uses eBPF tracepoints and kprobes to make kernel memory management mechanisms visible and easier to understand.
 
+**Status:** Experimental debugging and learning tool. 
+
+
 ## Preview
 
 ![TUI preview](docs/preview.png)
+
 
 ## Key Capabilities
 
 *   **Virtual Address Space Monitoring:** Tracks mmap, munmap, and brk syscalls to observe the creation, growth, and removal of memory regions.
 
-*   **Demand Paging Visibility:** Identifies "lazy" physical allocation (***INIT***) by hooking into kernel functions, showing exactly when reserved virtual space becomes backed by RAM.
+*   **Page Fault Visualization:** Identifies "lazy" physical allocation (***INIT***) by hooking into kernel functions, showing exactly when reserved virtual space becomes backed by RAM.
 
 *   **Swap Lifecycle Tracing:** Monitors the movement of pages to and from swap via page\_out (***SWAP***) and page\_in (***UNSWAP***) events.
 
@@ -22,11 +26,13 @@ See what is really happening inside process memory while your application is run
 
 *   **Thread-Specific Analysis:** Preserves thread identifiers (TIDs) for memory events, allowing the inspection of memory activity across different execution contexts within a single process.
 
+
 ## Quick start with Docker
 
 ```bash
 docker run -it -v /sys/kernel/tracing:/sys/kernel/tracing --userns=host --pid=host --privileged bareckidarek/deep_in_memory
 ```
+
 
 ## Build and run from source
 
@@ -48,6 +54,7 @@ make build
 sudo ./deep_in_memory
 ```
 
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -61,6 +68,7 @@ sudo ./deep_in_memory
 | w | Toggle log line wrapping |
 | f | Toggle range filter: heap+empty or all |
 | q / Ctrl+C | Quit |
+
 
 ## Traced events
 

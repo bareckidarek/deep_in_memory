@@ -69,7 +69,7 @@ tasks:
 
 *   **Virtual Address Space Monitoring:** Tracks mmap, munmap, and brk syscalls to observe the creation, growth, and removal of memory regions.
 
-*   **Demand Paging Visibility:** Identifies "lazy" physical allocation (***INIT***) by hooking into kernel functions, showing exactly when reserved virtual space becomes backed by RAM.
+*   **Page Fault Visualization:** Identifies "lazy" physical allocation (***INIT***) by hooking into kernel functions, showing exactly when reserved virtual space becomes backed by RAM.
 
 *   **Swap Lifecycle Tracing:** Monitors the movement of pages to and from swap via page\_out (***SWAP***) and page\_in (***UNSWAP***) events.
 
