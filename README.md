@@ -5,6 +5,7 @@ See what is really happening inside process memory while your application is run
 **deep\_in\_memory** is a Linux terminal user interface (TUI) utility designed to help understand how the Linux kernel manages process memory. It provides a real-time visualization of key memory lifecycle events, including virtual address space reservations, page faults, physical page allocation, and swap activity. The tool uses eBPF tracepoints and kprobes to make kernel memory management mechanisms visible and easier to understand.
 
 **Status:** Experimental debugging and learning tool. 
+**deep\_in\_memory** is a Linux terminal user interface (TUI) utility designed to help understand how the Linux kernel manages process memory. It provides a real-time visualization of key memory lifecycle events, including virtual address space reservations, page faults, physical page allocation, and swap activity. The tool uses eBPF tracepoints and kprobes to make kernel memory management mechanisms visible and easier to understand.
 
 ## Preview
 
@@ -15,6 +16,19 @@ See what is really happening inside process memory while your application is run
 *   **Virtual Address Space Monitoring:** Tracks mmap, munmap, and brk syscalls to observe the creation, growth, and removal of memory regions.
 
 *   **Page Fault Visualization:** Identifies "lazy" physical allocation (***INIT***) by hooking into kernel functions, showing exactly when reserved virtual space becomes backed by RAM.
+
+*   **Swap Lifecycle Tracing:** Monitors the movement of pages to and from swap via page\_out (***SWAP***) and page\_in (***UNSWAP***) events.
+
+*   **Address-to-Physical Resolution:** Allows users to look up specific virtual addresses to retrieve **Page Frame Numbers (PFN)** and cross-reference them with physical hardware ranges in **/proc/iomem**.
+
+*   **Chronological Event Logging:** Provides an aggregated, time-ordered log of memory operations, enabling the reconstruction of a process's memory behavior over time.
+
+*   **Thread-Specific Analysis:** Preserves thread identifiers (TIDs) for memory events, allowing the inspection of memory activity across different execution contexts within a single process.
+## Key Capabilities
+
+*   **Virtual Address Space Monitoring:** Tracks mmap, munmap, and brk syscalls to observe the creation, growth, and removal of memory regions.
+
+*   **Demand Paging Visibility:** Identifies "lazy" physical allocation (***INIT***) by hooking into kernel functions, showing exactly when reserved virtual space becomes backed by RAM.
 
 *   **Swap Lifecycle Tracing:** Monitors the movement of pages to and from swap via page\_out (***SWAP***) and page\_in (***UNSWAP***) events.
 
