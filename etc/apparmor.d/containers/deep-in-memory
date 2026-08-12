@@ -1,0 +1,72 @@
+#include <tunables/global>
+
+profile deep-in-memory /usr/local/bin/deep_in_memory flags=(attach_disconnected,mediate_deleted) {
+  
+  # Allow the deep_in_memory binary to be executed
+  /usr/local/bin/deep_in_memory mr,
+  /usr/local/bin/ r,
+
+  # Allow required kernel capabilities
+  capability sys_ptrace,
+  capability sys_admin,
+
+  # Allow bypassing DAC checks for read/search
+  capability dac_read_search,
+
+  # Allow ptrace access to inspect processes
+  ptrace read,
+
+  # Allow signals between processes in the same profile
+  signal peer=deep-in-memory,
+
+  # Read process memory layout
+  /proc/[0-9]*/smaps r,
+
+  # Read virtual to physical mappings
+  /proc/[0-9]*/pagemap r,
+
+  # Read kernel memory layout
+  /proc/iomem r,
+
+  # Read process metadata
+  /proc/[0-9]*/mem r,
+  /proc/[0-9]*/task/ r,
+
+  # Read process mount namespace information
+  /proc/[0-9]*/mountinfo r,
+
+  # Read process cgroup information
+  /proc/[0-9]*/cgroup r,
+
+  # Resolve user information
+  /etc/passwd r,
+
+  # Read kernel BTF metadata
+  /sys/kernel/btf/ r,
+  /sys/kernel/btf/** r,
+
+  # Read cgroup filesystem
+  /sys/fs/cgroup/** r,
+
+  # Read kernel tracing interface
+  /sys/kernel/tracing/ r,
+  /sys/kernel/tracing/** r,
+
+  # Read kernel memory management information
+  /sys/kernel/mm/** r,
+
+  # Read kprobe device information
+  /sys/devices/kprobe/** r,
+
+  # Allow application runtime data
+  /tmp/** rwk,
+
+  # Allow basic device access
+  /dev/null rw,
+  /dev/zero r,
+  /dev/random r,
+  /dev/urandom r,
+
+  # Prevent writes to proc filesystem
+  deny /proc/** w,
+}

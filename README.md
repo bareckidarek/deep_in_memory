@@ -33,6 +33,19 @@ See what is really happening inside process memory while your application is run
 docker run -it -v /sys/kernel/tracing:/sys/kernel/tracing --userns=host --pid=host --privileged bareckidarek/deep_in_memory
 ```
 
+or more securely with AppArmor:
+
+```bash
+sudo apparmor_parser -r -W etc/apparmor.d/containers/deep-in-memory
+docker run -it -v /sys/kernel/tracing:/sys/kernel/tracing:ro \
+       --userns=host \
+       --pid=host \
+       --cap-drop=ALL \
+       --cap-add=SYS_ADMIN \
+       --cap-add=SYS_PTRACE \
+       --cap-add=DAC_READ_SEARCH \
+       bareckidarek/deep_in_memory
+```
 
 ## Build and run from source
 

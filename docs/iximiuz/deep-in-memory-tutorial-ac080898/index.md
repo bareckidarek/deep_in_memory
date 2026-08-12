@@ -96,7 +96,23 @@ tasks:
 
 Jump to the :tab{text='deep_in_memory' name='deep_in_memory'} tab and run the command:
 ```shell
-docker run -it -v /sys/kernel/tracing:/sys/kernel/tracing --userns=host --pid=host --privileged bareckidarek/deep_in_memory
+docker run -it -v /sys/kernel/tracing:/sys/kernel/tracing \
+       --userns=host \
+       --pid=host \
+       --privileged \
+       bareckidarek/deep_in_memory
+```
+
+or more securely:
+
+```shell
+docker run -it -v /sys/kernel/tracing:/sys/kernel/tracing:ro \
+       --pid=host \
+       --cap-drop=ALL \
+       --cap-add=SYS_ADMIN \
+       --cap-add=SYS_PTRACE \
+       --cap-add=DAC_READ_SEARCH \
+       bareckidarek/deep_in_memory
 ```
 
 *   **\[processes\] Panel (Left Column):** This area displays a list of live processes. Users navigate this list using the arrow keys and press **Enter** to select a target PID, which triggers the eBPF tracing and loads initial memory metadata.
@@ -120,6 +136,21 @@ docker run -it -v /sys/kernel/tracing:/sys/kernel/tracing --userns=host --pid=ho
 ## Run single-task test apps
 
 In these tests, the process has a single thread of execution and creates no additional tasks. It therefore does not share its resources with any other threads or processes.
+
+::hint-box
+---
+:summary: Run test programs with manual control
+---
+Run with the `manual` parameter to control the step progression speed, for example:
+
+```shell
+./test_brk manual
+```
+
+```shell
+systemd-run --user --scope -p MemoryMax=300K -p MemorySwapMax=1M ./test_brk manual
+```
+::
 
 ---
 
@@ -173,7 +204,7 @@ When `test_brk` starts, the process already has an allocated heap region. In the
 
 In the second phase, when the second `100 kB` memory block is allocated, `glibc` performs a `brk` syscall to extend the heap area and allocate additional virtual memory. In the third phase, reading data from the first memory block proceeds without issues, as the memory has been properly mapped and populated with data.
 
-Finally, freeing the first and second memory blocks allows `glibc` to release the allocated memory by invoking the `brk` syscall again, thereby reducing the heap area accordingly.
+Finally, freeing the first and second memory blocks may allow `glibc` to merge the resulting free space into the top chunk and, if its size exceeds `M_TRIM_THRESHOLD`, reduce the program break via the `brk` system call, returning part of the heap to the operating system.
 
 ---
 
@@ -196,17 +227,11 @@ It is worth experimenting with different parameters in the command `systemd-run 
 
 ::hint-box
 ---
-:summary: Run test program with manual control
+:summary: Exhausting memory limits
 ---
-Run with the `manual` parameter to control the step progression speed
+In cgroups v2, `MemoryMax` and `MemorySwapMax` are independent limits — the process can use up to `MemoryMax` of RAM plus up to `MemorySwapMax` of swap at the same time (total headroom: `300K + 1M ≈ 1.3M` in this example). 
 
-```shell
-./test_brk manual
-```
-
-```shell
-systemd-run --user --scope -p MemoryMax=300K -p MemorySwapMax=1M ./test_brk manual
-```
+The OOM killer triggers only when both are exhausted.
 ::
 
 ---

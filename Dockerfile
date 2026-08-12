@@ -6,7 +6,6 @@ RUN apt-get update && \
 
 WORKDIR /home/deep_in_memory
 
-
 COPY ./cmd ./cmd
 COPY ./internal ./internal
 COPY ./go.mod ./
@@ -19,8 +18,8 @@ RUN go generate ./... && CGO_ENABLED=0 go build -o deep_in_memory -tags ebpf ./c
 
 FROM gcr.io/distroless/static-debian12
 
-WORKDIR /home/deep_in_memory
+WORKDIR /tmp
 
-COPY --from=build ./home/deep_in_memory/deep_in_memory /home/deep_in_memory/
+COPY --from=build ./home/deep_in_memory/deep_in_memory /usr/local/bin/
 
-CMD ["./deep_in_memory"]
+CMD ["deep_in_memory"]
