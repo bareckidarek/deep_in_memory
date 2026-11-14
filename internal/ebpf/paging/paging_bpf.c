@@ -112,7 +112,7 @@ int kretprobe_do_anonymous_page(struct pt_regs *ctx) {
     return 0;
 }
 
-SEC("kprobe/swap_writepage")
+SEC("kprobe/swap_writeout")
 int kprobe_swap_writepage(struct pt_regs *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
@@ -128,12 +128,10 @@ int kprobe_swap_writepage(struct pt_regs *ctx) {
     evt.pid = pid;
     evt.tid = (__u32)pid_tgid;
     
-    // Read page->index for virtual address
-    struct page *page = (struct page *)PT_REGS_PARM1(ctx);
-    if (page) {
-        __u64 idx_val;
-        bpf_probe_read_kernel(&idx_val, sizeof(idx_val), &page->index);
-        evt.addr = idx_val;
+    struct folio *folio = (struct folio *)PT_REGS_PARM1(ctx);
+
+    if (folio) {
+        evt.addr = BPF_CORE_READ(folio, index);
     }
     
     bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
@@ -142,7 +140,7 @@ int kprobe_swap_writepage(struct pt_regs *ctx) {
     return 0;
 }
 
-SEC("kretprobe/swap_writepage")
+SEC("kretprobe/swap_writeout")
 int kretprobe_swap_writepage(struct pt_regs *ctx) {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     
